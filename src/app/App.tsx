@@ -717,7 +717,7 @@ export function App({ root }: AppProps): React.JSX.Element {
   const treeChars = layout === 'stacked'
     ? dims.cols
     : clamp(Math.min(state.config.treeWidth, layout === 'mid' ? 30 : 40), 24, Math.max(24, dims.cols - 30));
-  const mainChars = layout === 'stacked' ? dims.cols : dims.cols - treeChars - 1;
+  const mainChars = state.treeHidden || layout === 'stacked' ? dims.cols : dims.cols - treeChars - 1;
 
   const refs = useRef({ rows, effSel, findHits, slashItems, themeItems, editorBody: contentRows - 3, mainChars, omniMode });
   refs.current = { rows, effSel, findHits, slashItems, themeItems, editorBody: contentRows - 3, mainChars, omniMode };
@@ -856,6 +856,16 @@ export function App({ root }: AppProps): React.JSX.Element {
         return;
       }
       if (printable) pushOmni(omni + input);
+      return;
+    }
+
+    /* global — toggle the file tree (full-width main pane). Lets a terminal
+       drag-select land cleanly in the editor with no tree sharing those rows
+       (pair with ctrl+g to also drop the line-number gutter). */
+    if (desc === 'ctrl+b') {
+      const nowHidden = !stateRef.current.treeHidden;
+      dispatch({ type: 'toggle-tree' });
+      toast(nowHidden ? 'tree hidden · ctrl+b to show' : 'tree shown');
       return;
     }
 
@@ -1134,15 +1144,17 @@ export function App({ root }: AppProps): React.JSX.Element {
     <ChromeContext.Provider value={chrome}>
       <Box flexDirection="column" width={dims.cols} height={dims.rows}>
         <Box height={contentRows}>
-          {layout === 'stacked'
-            ? (state.focus === 'tree' ? treePane : mainPane)
-            : (
-              <>
-                {treePane}
-                {divider}
-                {mainPane}
-              </>
-            )}
+          {state.treeHidden
+            ? mainPane
+            : layout === 'stacked'
+              ? (state.focus === 'tree' ? treePane : mainPane)
+              : (
+                <>
+                  {treePane}
+                  {divider}
+                  {mainPane}
+                </>
+              )}
         </Box>
         {paletteOpen ? (
           <SlashPalette

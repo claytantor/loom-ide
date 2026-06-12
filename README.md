@@ -290,8 +290,10 @@ Step by step:
 3. **Gather** — `git log <target>..HEAD` + `git diff <target>..HEAD`, plus your
    `PULL_REQUEST_TEMPLATE.md` if present.
 4. **Draft** — Claude (Agent SDK, one shot, no tools) writes a title + markdown
-   body. Very large diffs skip the AI and fall back to the commit log (see
-   `prDiffLimit`).
+   body. For very large diffs (over `prDiffLimit`, default 3000 lines) it's
+   handed a `git diff --stat` summary instead of the full patch — still a real
+   AI draft, just higher-level. (Only an absent/unauthed SDK falls back to the
+   bare commit log.)
 5. **Review & edit** — the draft opens in the editor (first line = title, blank
    line, then body); the status line reads `PR → dev · :w create PR · :q! cancel`.
    Edit it like any buffer.
@@ -306,8 +308,9 @@ body if the SDK or auth is unavailable, so `/pr` never blocks on it.
 **Configure** in `~/.loom/config.yml`:
 
 ```yaml
-# diffs larger than this many lines skip the AI and use a commit-log draft
-prDiffLimit: 1000
+# above this many diff lines, the AI gets a `git diff --stat` summary instead
+# of the full patch (it still drafts the PR either way)
+prDiffLimit: 3000
 # default base branch for `/pr` with no target ('' = ask each time)
 prDefaultTarget: ''
 ```
@@ -321,8 +324,11 @@ prDefaultTarget: ''
   another. The tree, git decorations, and buffer-staleness flags update live as
   the agent edits — your cockpit on what just changed.
 - **Copy-paste is normal:** no mouse capture, no borders in the work area —
-  shift-drag selects clean text. Toggle the gutter off (`Ctrl-G`) to copy code
-  without line numbers.
+  shift-drag selects clean text. Because the tree and editor share each terminal
+  line, a multi-line drag in the editor would otherwise also grab the tree —
+  press **`Ctrl-B`** to hide the tree (full-width editor) so the drag lands only
+  on editor text, and **`Ctrl-G`** to drop the line-number gutter for code with
+  nothing extra. `Ctrl-B` again (or `Tab`) brings the tree back.
 - **`Esc` always steps back** one level (clear filter, close a panel, leave a
   mode) and never quits Loom — only `/quit` exits.
 
@@ -361,6 +367,8 @@ prDefaultTarget: ''
 | `/find <regex>` | anywhere | ripgrep project search |
 | `/theme` | anywhere | switch color theme |
 | `/help` | anywhere | keys & commands reference |
+| `Ctrl-B` | anywhere | hide/show the file tree — full-width editor for clean selection |
+| `Ctrl-G` | editor | toggle the line-number gutter |
 | `:w` / `Ctrl-S` | editor | save (in a `/pr` draft, **creates the PR**) |
 | `:q` / `:wq` | editor | back to the tree (in a `/pr` draft, `:q!` **cancels** it) |
 | `Esc` | anywhere | step back a mode / clear filter |

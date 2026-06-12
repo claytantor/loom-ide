@@ -50,7 +50,7 @@ describe('parseDraft', () => {
 });
 
 describe('commitLogDraft', () => {
-  const base: PrContext = { target: 'main', head: 'feature/x', commits: [], diff: '', diffLines: 0, template: null };
+  const base: PrContext = { target: 'main', head: 'feature/x', commits: [], diff: '', diffLines: 0, diffStat: '', template: null };
 
   test('title is the first commit subject; body lists all commits', () => {
     const d = commitLogDraft({ ...base, commits: ['Add A', 'Fix B', 'Refactor C'] });
@@ -75,7 +75,7 @@ describe('commitLogDraft', () => {
 
 describe('buildPrompt', () => {
   test('includes commits, the diff, and base/head, and asks for title-first output', () => {
-    const p = buildPrompt({ target: 'dev', head: 'feat', commits: ['Do thing'], diff: '+added line', diffLines: 1, template: null });
+    const p = buildPrompt({ target: 'dev', head: 'feat', commits: ['Do thing'], diff: '+added line', diffLines: 1, diffStat: '', template: null });
     expect(p).toContain('"feat"');
     expect(p).toContain('"dev"');
     expect(p).toContain('- Do thing');
@@ -83,9 +83,18 @@ describe('buildPrompt', () => {
     expect(p.toLowerCase()).toContain('first line');
   });
   test('threads a template through when present', () => {
-    const p = buildPrompt({ target: 'dev', head: 'feat', commits: [], diff: '', diffLines: 0, template: '## My Template' });
+    const p = buildPrompt({ target: 'dev', head: 'feat', commits: [], diff: '', diffLines: 0, diffStat: '', template: '## My Template' });
     expect(p).toContain('## My Template');
     expect(p).toContain('TEMPLATE');
+  });
+  test('summarized mode sends the diff --stat, not the full patch', () => {
+    const p = buildPrompt(
+      { target: 'dev', head: 'feat', commits: ['Big change'], diff: 'HUGE_PATCH', diffLines: 9999, diffStat: ' app.ts | 200 ++++', template: null },
+      { summarized: true },
+    );
+    expect(p).toContain('git diff --stat');
+    expect(p).toContain('app.ts | 200');
+    expect(p).not.toContain('HUGE_PATCH');
   });
 });
 
@@ -147,6 +156,7 @@ const ctx: PrContext = {
   commits: ['Add login form', 'Wire API'],
   diff: '+const a = 1;\n-const a = 0;',
   diffLines: 2,
+  diffStat: ' login.ts | 2 +-',
   template: null,
 };
 
@@ -197,17 +207,19 @@ describe('generatePrDescription', () => {
     expect(d.note).toMatch(/commit-log/i);
   });
 
-  test('an over-limit diff skips the AI entirely (R7) and notes it', async () => {
-    let called = false;
-    const query: QueryFn = async function* () {
-      called = true;
-      yield { type: 'assistant', message: { content: [{ type: 'text', text: 'should not run' }] } };
+  test('an over-limit diff STILL uses the AI, but with a diff --stat summary', async () => {
+    let seenPrompt = '';
+    const query: QueryFn = async function* (args) {
+      seenPrompt = args.prompt;
+      yield { type: 'assistant', message: { content: [{ type: 'text', text: 'Big feature\n\nsummary' }] } };
     };
-    const big = { ...ctx, diffLines: 5000 };
+    const big = { ...ctx, diffLines: 5000, diffStat: ' a.ts | 999 ++++', diff: 'FULL_PATCH' };
     const d = await generatePrDescription(big, { query, diffLimit: 1000 });
-    expect(called).toBe(false);
-    expect(d.usedAi).toBe(false);
-    expect(d.note).toMatch(/5000 lines/);
+    expect(d.usedAi).toBe(true); // no longer skipped
+    expect(d.title).toBe('Big feature');
+    expect(d.note).toMatch(/large diff.*5000/i);
+    expect(seenPrompt).toContain('git diff --stat'); // summarized prompt
+    expect(seenPrompt).not.toContain('FULL_PATCH'); // full patch withheld
   });
 
   // Only meaningful when the SDK is absent — with it installed, the real import

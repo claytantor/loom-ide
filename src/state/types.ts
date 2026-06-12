@@ -57,6 +57,8 @@ export interface AppState {
   selPath: string | null;
   focus: Focus;
   mainView: MainView;
+  /** Hide the file tree so the main pane is full-width (clean editor selection). */
+  treeHidden: boolean;
 
   openFile: string | null;
   vim: VimState | null;
