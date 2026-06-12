@@ -20,6 +20,8 @@ export interface EditorProps {
   diagnostics: Diagnostic[];
   width: number;
   height: number;
+  /** When set (e.g. a /pr compose buffer), shown in the status line tail. */
+  composeHint?: string;
 }
 
 const SCROLLOFF = 2;
@@ -107,8 +109,9 @@ export function Editor(props: EditorProps): React.JSX.Element {
     <Box flexDirection="column" width={width} height={height} paddingLeft={1}>
       <Box>
         <Text color={props.focused ? theme.accent : theme.dim} wrap="truncate">
-          <Text color={theme.dim}>{title}</Text>
+          <Text color={props.composeHint ? theme.secondary : theme.dim} bold={!!props.composeHint}>{title}</Text>
           {vim.dirty ? <Text color={theme.gitM}> {g.dirty}</Text> : null}
+          {props.composeHint ? <Text color={theme.glow}>  {props.composeHint}</Text> : null}
           {props.stale ? <Text color={theme.accent}>  [on-disk changed {g.reload} :e reloads]</Text> : null}
         </Text>
       </Box>

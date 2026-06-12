@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import { mkdtemp, rm, writeFile, chmod } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { GH_SPEC, GIT_SPEC, parseArgv, runByLabel, runGh, runGit, runPassthrough, stripAnsi } from '../src/services/passthru.js';
+import { GH_SPEC, GIT_SPEC, parseArgv, runByLabel, runGh, runGhArgv, runGit, runPassthrough, runPassthroughArgv, stripAnsi } from '../src/services/passthru.js';
 
 describe('parseArgv', () => {
   test('splits on whitespace', () => {
@@ -117,5 +117,49 @@ describe('runPassthrough', () => {
     expect((await runGh(dir, 'x', { bin })).label).toBe('gh');
     expect((await runGit(dir, 'x', { bin })).label).toBe('git');
     expect((await runByLabel('git', dir, 'x', { bin })).label).toBe('git');
+  });
+});
+
+describe('runPassthroughArgv', () => {
+  let dir: string;
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'loom-ptargv-'));
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+  async function fake(body: string): Promise<string> {
+    const p = join(dir, 'fakebin');
+    await writeFile(p, `#!/usr/bin/env bash\n${body}\n`);
+    await chmod(p, 0o755);
+    return p;
+  }
+
+  test('passes an explicit argv array straight through, no tokenization', async () => {
+    const bin = await fake('printf "%s\\n" "$@"');
+    const r = await runPassthroughArgv(GH_SPEC, dir, ['pr', 'create', '--title', 'a b c'], { bin });
+    expect(r.lines).toEqual(['pr', 'create', '--title', 'a b c']);
+  });
+
+  test('keeps a MULTI-LINE argv element intact (the PR-body fix)', async () => {
+    // Count the lines of the 4th arg ($4) to prove the newline survived as one arg.
+    const bin = await fake('printf "%s" "$4" | wc -l | tr -d " "');
+    const body = 'first line\nsecond line\nthird line';
+    const r = await runPassthroughArgv(GH_SPEC, dir, ['pr', 'create', '--body', body], { bin });
+    // wc -l counts newlines: 2 between 3 lines.
+    expect(r.lines).toEqual(['2']);
+  });
+
+  test('empty argv returns usage without spawning', async () => {
+    const r = await runPassthroughArgv(GIT_SPEC, dir, [], { bin: 'not-real' });
+    expect(r.ok).toBe(true);
+    expect(r.lines[0]).toContain('usage: /git');
+  });
+
+  test('runGhArgv labels the result gh and forwards argv', async () => {
+    const bin = await fake('printf "%s\\n" "$@"');
+    const r = await runGhArgv(dir, ['auth', 'status'], { bin });
+    expect(r.label).toBe('gh');
+    expect(r.argv).toEqual(['auth', 'status']);
   });
 });

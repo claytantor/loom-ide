@@ -68,6 +68,26 @@ describe('mergeConfig', () => {
     expect(config.accent).toBe(DEFAULT_CONFIG.accent);
     expect(config.fuzzyMode).toBe('dim');
   });
+  test('prDiffLimit / prDefaultTarget default and apply', () => {
+    expect(DEFAULT_CONFIG.prDiffLimit).toBe(1000);
+    expect(DEFAULT_CONFIG.prDefaultTarget).toBe('');
+    const { config, warnings } = mergeConfig({ prDiffLimit: 250, prDefaultTarget: '  dev  ' });
+    expect(warnings).toEqual([]);
+    expect(config.prDiffLimit).toBe(250);
+    expect(config.prDefaultTarget).toBe('dev'); // trimmed
+  });
+  test('prDiffLimit floors at 0 and rounds; non-number warns', () => {
+    expect(mergeConfig({ prDiffLimit: -5 }).config.prDiffLimit).toBe(0);
+    expect(mergeConfig({ prDiffLimit: 12.7 }).config.prDiffLimit).toBe(13);
+    const { config, warnings } = mergeConfig({ prDiffLimit: 'lots' });
+    expect(warnings.some((w) => w.includes('prDiffLimit'))).toBe(true);
+    expect(config.prDiffLimit).toBe(DEFAULT_CONFIG.prDiffLimit);
+  });
+  test('non-string prDefaultTarget warns and keeps default', () => {
+    const { config, warnings } = mergeConfig({ prDefaultTarget: 123 });
+    expect(warnings.some((w) => w.includes('prDefaultTarget'))).toBe(true);
+    expect(config.prDefaultTarget).toBe('');
+  });
 });
 
 describe('resolveTheme', () => {

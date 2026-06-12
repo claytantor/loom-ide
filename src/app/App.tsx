@@ -50,6 +50,30 @@ const GHOST_MS = 800;
 const PULSE_MS = 900;
 const MAX_PALETTE_ROWS = 9;
 
+export interface PrArgs {
+  target: string;
+  draft: boolean;
+  noAi: boolean;
+}
+
+/** Parse `/pr` arguments: first non-flag token is the base branch; `--draft`
+   (R4) and `--no-ai` (R3) are recognized flags. Tokenized quote-aware. */
+export function parsePrArgs(arg: string): PrArgs {
+  const out: PrArgs = { target: '', draft: false, noAi: false };
+  for (const tok of parseArgv(arg)) {
+    if (tok === '--draft') out.draft = true;
+    else if (tok === '--no-ai') out.noAi = true;
+    else if (!out.target && !tok.startsWith('-')) out.target = tok;
+  }
+  return out;
+}
+
+/** A CommandResult synthesized in-app (no spawn) so a fail-fast path can render
+   in the same main-area panel /gh /git use. */
+function synthCommandResult(label: string, argv: string[], lines: string[], error: string): CommandResult {
+  return { label, argv, lines, code: 1, ok: false, error, truncated: false };
+}
+
 export function App({ root }: AppProps): React.JSX.Element {
   const { exit } = useApp();
   const [state, dispatch] = useReducer(reduce, undefined, () => initialState(root, basename(root) || root));
@@ -316,6 +340,95 @@ export function App({ root }: AppProps): React.JSX.Element {
     if (result.error) toast(result.error, true);
   }, [root, toast]);
 
+  /* ── /pr — AI-assisted pull request ─────────────────────────────────────
+   * push HEAD → preflight gh auth → gather commits+diff → AI (or commit-log)
+   * draft → host the draft in the editor as an ephemeral compose buffer. The
+   * save (:w / :wq / Ctrl-S) is intercepted in saveNow → submitPr creates the PR. */
+  const runPr = useCallback(async (target: string, draft: boolean, noAi: boolean): Promise<void> => {
+    const cols = refs.current.mainChars;
+    const head = await currentBranch(root);
+    if (!head) {
+      toast('not a git repository', true);
+      return;
+    }
+    if (head === target) {
+      toast(`already on ${target} — check out a feature branch first`, true);
+      return;
+    }
+
+    dispatch({ type: 'spinner', label: '/pr' });
+    try {
+      // R6 — fail fast before pushing or drafting.
+      const auth = await preflightAuth(root, { cols });
+      if (!auth.ok) {
+        dispatch({ type: 'view', view: 'command', title: 'pr auth status', command: auth.result });
+        toast('gh not authenticated — run: gh auth login', true);
+        return;
+      }
+
+      const push = await runGit(root, 'push origin HEAD', { cols });
+      if (!push.ok) {
+        dispatch({ type: 'view', view: 'command', title: 'pr push origin HEAD', command: push });
+        toast(push.error ?? 'push failed', true);
+        return;
+      }
+
+      const ctx = await gatherPrContext(root, target);
+      if (ctx.commits.length === 0 && ctx.diff.trim() === '') {
+        toast(`nothing to PR — ${head} has no commits beyond ${target}`, true);
+        return;
+      }
+
+      const draftDoc = noAi
+        ? { ...commitLogDraft(ctx), usedAi: false as const }
+        : await generatePrDescription(ctx, { diffLimit: stateRef.current.config.prDiffLimit });
+      if ('note' in draftDoc && draftDoc.note) toast(draftDoc.note);
+
+      const compose: PrCompose = { target, head, draft, label: `PR → ${target}` };
+      const vim = createVim(`${draftDoc.title}\n\n${draftDoc.body}\n`);
+      prSubmittingRef.current = false;
+      dispatch({ type: 'pr-compose-open', compose, vim });
+    } catch (err) {
+      toast((err as Error).message, true);
+    } finally {
+      dispatch({ type: 'spinner', label: null });
+    }
+  }, [root, toast]);
+
+  const submitPr = useCallback(async (compose: PrCompose, vim: VimState): Promise<void> => {
+    const { title, body } = parseDraft(getText(vim));
+    if (!title) {
+      toast('PR needs a title on the first line — add one or :q! to cancel', true);
+      return; // keep the compose buffer open
+    }
+    // Mark in-flight synchronously so a trailing :wq quit doesn't cancel us.
+    prSubmittingRef.current = true;
+    dispatch({ type: 'spinner', label: '/pr' });
+    try {
+      const { url, result } = await createPr(
+        root,
+        { target: compose.target, head: compose.head, title, body, draft: compose.draft },
+        { cols: refs.current.mainChars },
+      );
+      dispatch({ type: 'pr-compose-close' });
+      dispatch({ type: 'view', view: 'command', title: `pr → ${compose.target}`, command: result });
+      if (url) toast(`PR ${result.ok ? 'created' : 'exists'}: ${url}`);
+      else if (result.ok) toast('PR created');
+      else toast(result.error ?? 'gh pr create failed', true);
+    } catch (err) {
+      toast((err as Error).message, true);
+    } finally {
+      prSubmittingRef.current = false;
+      dispatch({ type: 'spinner', label: null });
+    }
+  }, [root, toast]);
+
+  const cancelPr = useCallback((): void => {
+    prSubmittingRef.current = false;
+    dispatch({ type: 'pr-compose-close' });
+    toast('PR cancelled');
+  }, [toast]);
+
   const runDiff = useCallback(async (rel: string): Promise<void> => {
     dispatch({ type: 'spinner', label: '/diff' });
     const raw = await diffFile(root, rel);
@@ -500,6 +613,14 @@ export function App({ root }: AppProps): React.JSX.Element {
         if (item.arg) void runPassthru('gh', item.arg);
         else dispatch({ type: 'input-mode', mode: { kind: 'passthru', label: 'gh' } });
         return;
+      case '/pr': {
+        clear();
+        const args = parsePrArgs(item.arg);
+        if (args.target) void runPr(args.target, args.draft, args.noAi);
+        else if (s.config.prDefaultTarget) void runPr(s.config.prDefaultTarget, args.draft, args.noAi);
+        else dispatch({ type: 'input-mode', mode: { kind: 'pr' } });
+        return;
+      }
       case '/theme':
         // Open the theme picker: keep slash mode with a trailing space.
         pushOmni('/theme ');
@@ -521,7 +642,7 @@ export function App({ root }: AppProps): React.JSX.Element {
       default:
         clear();
     }
-  }, [requestOpen, runDiff, runBlame, runFind, runPassthru, toast, doQuit]);
+  }, [requestOpen, runDiff, runBlame, runFind, runPassthru, runPr, toast, doQuit]);
 
   const submitEx = useCallback((cmd: string): void => {
     const s = stateRef.current;
@@ -647,6 +768,12 @@ export function App({ root }: AppProps): React.JSX.Element {
           dispatch({ type: 'input-mode', mode: null });
           clearOmni(false);
           if (value) void runPassthru(im.label, value);
+        } else if (im.kind === 'pr') {
+          dispatch({ type: 'input-mode', mode: null });
+          clearOmni(false);
+          const args = parsePrArgs(value);
+          if (args.target) void runPr(args.target, args.draft, args.noAi);
+          else toast('usage: /pr <base-branch> [--draft] [--no-ai]', true);
         } else {
           void submitRename(im.target, value);
         }
@@ -970,9 +1097,10 @@ export function App({ root }: AppProps): React.JSX.Element {
         gutter={state.config.gutter}
         branch={state.branch}
         stale={state.bufferStale}
-        diagnostics={state.diagnostics.get(state.openFile) ?? []}
+        diagnostics={state.prCompose ? [] : (state.diagnostics.get(state.openFile) ?? [])}
         width={mainChars}
         height={contentRows}
+        {...(state.prCompose ? { composeHint: ':w create PR · :q! cancel' } : {})}
       />
     );
   } else {

@@ -117,6 +117,37 @@ describe('watcher batches', () => {
   });
 });
 
+describe('pr-compose', () => {
+  const vim = { lines: ['PR title', '', 'body'], cursor: { row: 0, col: 0 } } as unknown as VimState;
+  const compose = { target: 'dev', head: 'feature/x', draft: false, label: 'PR → dev' } as const;
+
+  test('open hosts the draft in the editor without touching the tree path', () => {
+    let s = boot();
+    s = apply(s, { type: 'select', path: 'package.json' });
+    s = apply(s, { type: 'pr-compose-open', compose, vim });
+    expect(s.prCompose).toEqual(compose);
+    expect(s.vim).toBe(vim);
+    expect(s.openFile).toBe('PR → dev'); // virtual label, NOT a real path
+    expect(s.mainView).toBe('editor');
+    expect(s.focus).toBe('editor');
+    // The label must NOT be treated as a tree path: selection is untouched and
+    // no phantom node is created/expanded for it.
+    expect(s.selPath).toBe('package.json');
+    expect(findNode(s.tree, 'PR → dev')).toBeNull();
+  });
+
+  test('close clears the compose state and returns focus to the tree', () => {
+    let s = boot();
+    s = apply(s, { type: 'pr-compose-open', compose, vim });
+    s = apply(s, { type: 'pr-compose-close' });
+    expect(s.prCompose).toBeNull();
+    expect(s.vim).toBeNull();
+    expect(s.openFile).toBeNull();
+    expect(s.mainView).toBe('empty');
+    expect(s.focus).toBe('tree');
+  });
+});
+
 describe('open-file', () => {
   test('expands ancestors, selects, focuses editor, clears omni', () => {
     let s = boot();

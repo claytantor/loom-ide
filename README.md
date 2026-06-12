@@ -189,6 +189,142 @@ ever means one thing in one context. Switch or author a theme with `/theme`.
 
 ---
 
+## User guide
+
+The practical tour — launch Loom in any repo and drive it from the keyboard.
+(For the *why* behind each piece, see [Core concepts](#core-concepts) above.)
+
+### Launch
+
+```bash
+loom            # open the current directory
+loom ~/project  # open a specific repo
+```
+
+Loom runs in the alternate screen, so your scrollback is untouched and restored
+on exit. Quit with `/quit`.
+
+### Move around the tree
+
+The file tree (left) always has a selection.
+
+| Key | Does |
+| --- | ---- |
+| `↑` `↓` (or `k` `j`) | move the selection |
+| `→` `l` | expand a directory / open a file |
+| `←` `h` | collapse / jump to the parent |
+| `Enter` | open the selected file (or toggle a directory) |
+| `Tab` | jump between the tree and the open editor |
+
+**Find a file fast:** just start typing — the tree fuzzy-filters live (`srvind`
+→ `src/server/index.ts`), auto-expanding matches and pre-selecting the best one.
+`Enter` opens it; `Esc` clears the filter and the tree springs back exactly as
+it was.
+
+### Edit a file
+
+Opening a file drops you into a full vim editor (modes, motions, operators,
+marks, registers, search/substitute, undo/redo).
+
+- `:w` / `Ctrl-S` — save · `:q` / `:wq` — back to the tree (Loom keeps running)
+- `Ctrl-G` — toggle the line-number gutter
+- `K` — hover docs · `gd` — go to definition (when a language server is running)
+
+If something changes the file underneath you, Loom flags it in the status line
+and waits for you to reload — it never silently clobbers your edit.
+
+### The omni-bar (bottom input)
+
+One bar, mode-switched by the first character:
+
+| You type | Mode |
+| -------- | ---- |
+| plain text | fuzzy-filter the tree |
+| `/…` | slash command (palette) |
+| `:…` | vim ex command (against the open file) |
+
+Press `/` any time for the palette; **`/help`** shows the full cheat sheet
+(scroll `↑↓`, `Esc` to close).
+
+### Slash commands
+
+**On the selected file:** `/edit` (open), `/diff` (git diff), `/blame`,
+`/rename`, `/reveal`, `/discard` (revert to HEAD).
+**Anywhere:** `/find <regex>` (ripgrep search), `/theme`, `/help`, `/quit`.
+
+### Git & GitHub passthroughs
+
+Loom keeps `git` and `gh` one keystroke away — output lands in the main panel
+(scroll `↑↓`, `Esc` to close). They are **distinct tools for distinct jobs**:
+
+- **`/git <args>`** — core version control: `/git status -sb`,
+  `/git log --oneline`, `/git branch`, `/git diff` …
+- **`/gh <args>`** — GitHub features: `/gh pr list`, `/gh issue view 42`,
+  `/gh run list`, `/gh api user` …
+
+Both run *your* `git`/`gh` with *your* auth — anything those CLIs do, you can do
+from Loom. Type `/git` or `/gh` with no args to get a prompt.
+
+### AI-assisted pull requests — `/pr`
+
+`/pr` turns the current branch into a GitHub pull request with a **Claude-drafted
+title and description that you review and edit in Loom's own vim editor** before
+it's created. Nothing is opened on GitHub until you save.
+
+```
+/pr dev              # PR from the current branch against `dev`, AI description
+/pr main --draft     # open it as a draft PR
+/pr dev --no-ai      # skip the AI; seed the draft from your commit log
+/pr                  # no target → Loom prompts (or uses prDefaultTarget)
+```
+
+Step by step:
+
+1. **Preflight** — checks `gh auth status`; fails fast in the panel if you're not
+   signed in.
+2. **Push** — `git push origin HEAD` (creates the remote branch if needed); a
+   rejected push stops here.
+3. **Gather** — `git log <target>..HEAD` + `git diff <target>..HEAD`, plus your
+   `PULL_REQUEST_TEMPLATE.md` if present.
+4. **Draft** — Claude (Agent SDK, one shot, no tools) writes a title + markdown
+   body. Very large diffs skip the AI and fall back to the commit log (see
+   `prDiffLimit`).
+5. **Review & edit** — the draft opens in the editor (first line = title, blank
+   line, then body); the status line reads `PR → dev · :w create PR · :q! cancel`.
+   Edit it like any buffer.
+6. **Create** — `:w` (or `:wq` / `Ctrl-S`) runs `gh pr create` with your edited
+   text and the **PR URL appears in the main panel**. `:q!` cancels — no PR.
+
+**Needs:** `gh` installed and authenticated (`gh auth login`); Claude Code auth
+in `~/.claude` — the Agent SDK reuses it, so **no API key** and usage counts
+against your normal Claude quota. Drafting degrades gracefully to the commit-log
+body if the SDK or auth is unavailable, so `/pr` never blocks on it.
+
+**Configure** in `~/.loom/config.yml`:
+
+```yaml
+# diffs larger than this many lines skip the AI and use a commit-log draft
+prDiffLimit: 1000
+# default base branch for `/pr` with no target ('' = ask each time)
+prDefaultTarget: ''
+```
+
+> `/pr` is a real, mutating workflow — it pushes your branch and opens a PR. It
+> always stops at the editor for your review, and **only the save creates the PR**.
+
+### Tips
+
+- **Beside Claude Code:** keep Claude in one pane doing agentic work and Loom in
+  another. The tree, git decorations, and buffer-staleness flags update live as
+  the agent edits — your cockpit on what just changed.
+- **Copy-paste is normal:** no mouse capture, no borders in the work area —
+  shift-drag selects clean text. Toggle the gutter off (`Ctrl-G`) to copy code
+  without line numbers.
+- **`Esc` always steps back** one level (clear filter, close a panel, leave a
+  mode) and never quits Loom — only `/quit` exits.
+
+---
+
 ## Requirements
 
 - **Node.js ≥ 18** with ES modules (the install target; broadest SSH-box
@@ -199,6 +335,11 @@ ever means one thing in one context. Switch or author a theme with `/theme`.
   (Gnome Terminal, iTerm2, kitty, Alacritty, WezTerm all qualify).
 - Optional, auto-detected when present: `git`, `rg` (ripgrep),
   `typescript-language-server`, `pyright`/`pylsp`.
+- For AI-drafted pull requests (`/pr`): the GitHub CLI `gh` (authenticated via
+  `gh auth login`) and the [`@anthropic-ai/claude-agent-sdk`](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk),
+  which reuses your existing `~/.claude` login (no API key needed). If the SDK or
+  `~/.claude` auth is absent, `/pr` still works — it falls back to a commit-log
+  draft. Use `/pr <branch> --no-ai` to skip the AI entirely.
 
 ---
 
@@ -213,11 +354,12 @@ ever means one thing in one context. Switch or author a theme with `/theme`.
 | `/diff` `/blame` | selection | git on the selected file |
 | `/git <args>` | anywhere | git passthrough — branches, commits, diffs, history → main panel |
 | `/gh <args>` | anywhere | GitHub CLI passthrough — PRs, issues, releases → main panel |
+| `/pr <branch> [--draft] [--no-ai]` | anywhere | open a PR: AI drafts title+body, you edit it in the editor, `:w` creates it |
 | `/find <regex>` | anywhere | ripgrep project search |
 | `/theme` | anywhere | switch color theme |
 | `/help` | anywhere | keys & commands reference |
-| `:w` / `Ctrl-S` | editor | save |
-| `:q` / `:wq` | editor | back to the tree (Loom stays open) |
+| `:w` / `Ctrl-S` | editor | save (in a `/pr` draft, **creates the PR**) |
+| `:q` / `:wq` | editor | back to the tree (in a `/pr` draft, `:q!` **cancels** it) |
 | `Esc` | anywhere | step back a mode / clear filter |
 
 Everything above is rebindable in `~/.loom/keybindings.yml`.

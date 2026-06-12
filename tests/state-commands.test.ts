@@ -3,7 +3,17 @@ import { filterSlash, filterThemeEntries, slashMatchPositions, themeEntries } fr
 
 describe('filterSlash', () => {
   test('bare slash lists everything', () => {
-    expect(filterSlash('/').length).toBe(12);
+    expect(filterSlash('/').length).toBe(13);
+  });
+  test('/pr is a distinct command that captures its args (target + flags)', () => {
+    const items = filterSlash('/pr dev --draft --no-ai');
+    expect(items.length).toBe(1);
+    expect(items[0]!.name).toBe('/pr');
+    expect(items[0]!.arg).toBe('dev --draft --no-ai');
+    expect(items[0]!.takesArg).toBe(true);
+  });
+  test('/p prefix offers /pr', () => {
+    expect(filterSlash('/p').map((c) => c.name)).toContain('/pr');
   });
   test('/gh and /git are distinct commands that capture their args', () => {
     const gh = filterSlash('/gh pr list --limit 5');

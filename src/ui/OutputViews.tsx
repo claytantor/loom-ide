@@ -241,6 +241,7 @@ export const HELP_ROWS: HelpRow[] = [
   { kind: 'bind', keys: 'enter', desc: 'open at match (find)' },
   { kind: 'bind', keys: 'esc', desc: 'close, back to the tree' },
   { kind: 'blank' },
+  { kind: 'note', text: '/pr opens an AI draft in the editor — :w (or ctrl-s) creates the PR, :q! cancels.' },
   { kind: 'note', text: 'esc always steps back one level — only /quit exits loom.' },
   { kind: 'note', text: 'keys are rebindable in ~/.loom/keybindings.yml' },
 ];

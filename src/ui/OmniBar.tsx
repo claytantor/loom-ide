@@ -91,6 +91,8 @@ function promptFor(input: InputMode | null): string | null {
       return 'find:';
     case 'passthru':
       return input.label;
+    case 'pr':
+      return 'pr →';
     case 'rename':
       return `rename ${input.target} ${'→'}`;
     case 'confirm':
