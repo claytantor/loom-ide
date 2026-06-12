@@ -10,6 +10,10 @@ export interface LoomConfig {
   fuzzyMode: FuzzyMode;
   gutter: boolean;
   treeWidth: number;
+  /** /pr: diffs larger than this (in lines) skip the AI and use a commit-log draft (R7). */
+  prDiffLimit: number;
+  /** /pr: default base branch used when `/pr` is run without a target ('' = prompt). */
+  prDefaultTarget: string;
 }
 
 export const DEFAULT_CONFIG: LoomConfig = {
@@ -19,6 +23,8 @@ export const DEFAULT_CONFIG: LoomConfig = {
   fuzzyMode: 'dim',
   gutter: true,
   treeWidth: 32,
+  prDiffLimit: 1000,
+  prDefaultTarget: '',
 };
 
 const ACCENT_NAMES: AccentName[] = ['cyan', 'amber', 'green', 'violet'];
@@ -66,6 +72,15 @@ export function mergeConfig(raw: unknown): ConfigLoadResult {
     if (typeof o.treeWidth === 'number' && Number.isFinite(o.treeWidth)) {
       config.treeWidth = Math.max(24, Math.min(46, Math.round(o.treeWidth)));
     } else warnings.push('config.yml: treeWidth must be a number');
+  }
+  if (o.prDiffLimit !== undefined) {
+    if (typeof o.prDiffLimit === 'number' && Number.isFinite(o.prDiffLimit)) {
+      config.prDiffLimit = Math.max(0, Math.round(o.prDiffLimit));
+    } else warnings.push('config.yml: prDiffLimit must be a number');
+  }
+  if (o.prDefaultTarget !== undefined) {
+    if (typeof o.prDefaultTarget === 'string') config.prDefaultTarget = o.prDefaultTarget.trim();
+    else warnings.push('config.yml: prDefaultTarget must be a string');
   }
   return { config, warnings };
 }

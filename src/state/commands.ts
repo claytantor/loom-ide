@@ -21,6 +21,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: '/find', selScoped: false, desc: 'ripgrep project search', takesArg: true },
   { name: '/git', selScoped: false, desc: 'git — branches, commits, diffs, history', takesArg: true },
   { name: '/gh', selScoped: false, desc: 'github cli — prs, issues, releases, runs', takesArg: true },
+  { name: '/pr', selScoped: false, desc: 'open a github pull request (AI description)', takesArg: true },
   { name: '/theme', selScoped: false, desc: 'switch color theme', takesArg: true },
   { name: '/help', selScoped: false, desc: 'keys & commands' },
   { name: '/quit', selScoped: false, desc: 'quit loom', danger: true },

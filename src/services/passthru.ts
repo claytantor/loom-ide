@@ -103,8 +103,14 @@ function notFoundResult(spec: PassthruSpec, argv: string[]): CommandResult {
   };
 }
 
+/** Tokenize an arg string, then run. Kept for the omni-driven `/gh` `/git` flow. */
 export function runPassthrough(spec: PassthruSpec, root: string, argString: string, opts: RunOptions = {}): Promise<CommandResult> {
-  const argv = parseArgv(argString);
+  return runPassthroughArgv(spec, root, parseArgv(argString), opts);
+}
+
+/** Run with an explicit argv array — bypasses the tokenizer so a multi-line
+   element (e.g. a PR body, or a `--body-file` path) reaches the binary intact. */
+export function runPassthroughArgv(spec: PassthruSpec, root: string, argv: string[], opts: RunOptions = {}): Promise<CommandResult> {
   const bin = opts.bin ?? spec.bin;
   const timeoutMs = opts.timeoutMs ?? TIMEOUT_MS;
 
@@ -228,6 +234,12 @@ export type PassthruLabel = 'gh' | 'git';
 
 export function runGh(root: string, argString: string, opts: RunOptions = {}): Promise<CommandResult> {
   return runPassthrough(GH_SPEC, root, argString, opts);
+}
+
+/** gh with an explicit argv — used by the /pr flow to pass a multi-line body
+   safely via `--body-file` without going through the arg tokenizer. */
+export function runGhArgv(root: string, argv: string[], opts: RunOptions = {}): Promise<CommandResult> {
+  return runPassthroughArgv(GH_SPEC, root, argv, opts);
 }
 
 export function runGit(root: string, argString: string, opts: RunOptions = {}): Promise<CommandResult> {

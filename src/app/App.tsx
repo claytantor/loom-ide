@@ -20,13 +20,16 @@ import { scanRepo, SCAN_CAP } from '../services/fsScan.js';
 import { watchRepo, type RepoWatcher, type WatchBatch } from '../services/watcher.js';
 import { blameFile, currentBranch, diffFile, discardFile, isRepo as gitIsRepo, repoStatus } from '../services/git.js';
 import { findInProject } from '../services/ripgrep.js';
-import { runByLabel, type PassthruLabel } from '../services/passthru.js';
+import { parseArgv, runByLabel, runGit, type CommandResult, type PassthruLabel } from '../services/passthru.js';
+import {
+  commitLogDraft, createPr, gatherPrContext, generatePrDescription, parseDraft, preflightAuth,
+} from '../services/pr.js';
 import { loadBuffer, renamePath, saveBuffer } from '../services/bufferIo.js';
 import { ensureSeeded, loadSettings, saveConfig } from '../services/configIo.js';
 import { LspManager, pathToUri, resolveLanguage, uriToPath, type LspClient } from '../services/lsp/index.js';
 
 import { initialState, reduce, FLASH_MS } from '../state/reducer.js';
-import { deriveOmniMode, type ConfirmAction } from '../state/types.js';
+import { deriveOmniMode, type ConfirmAction, type PrCompose } from '../state/types.js';
 import { filterSlash, filterThemeEntries, themeEntries, type SlashItem, type ThemeEntry } from '../state/commands.js';
 
 import { ChromeContext } from '../ui/context.js';
@@ -101,6 +104,9 @@ export function App({ root }: AppProps): React.JSX.Element {
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lspSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lspSyncedTextRef = useRef<string | null>(null);
+  // Set synchronously while a /pr submit is in flight, so the trailing :wq quit
+  // (save+quit in one burst) is a guarded no-op instead of cancelling the PR.
+  const prSubmittingRef = useRef(false);
 
   const toast = useCallback((text: string, danger = false): void => {
     dispatch({ type: 'toast', text, danger });
@@ -239,6 +245,12 @@ export function App({ root }: AppProps): React.JSX.Element {
 
   const saveNow = useCallback(async (vim: VimState): Promise<void> => {
     const s = stateRef.current;
+    // Compose-buffer save (the /pr crux): :w, :wq, and Ctrl-S all funnel here.
+    // Intercept before any disk write — there is no real file behind this buffer.
+    if (s.prCompose) {
+      void submitPr(s.prCompose, vim);
+      return;
+    }
     if (!s.openFile) return;
     try {
       await saveBuffer(root, s.openFile, vim.lines, s.trailingNewline);
@@ -265,7 +277,14 @@ export function App({ root }: AppProps): React.JSX.Element {
   const handleVimEffects = useCallback((effects: VimEffects, vim: VimState): void => {
     if (effects.message) toast(effects.message);
     if (effects.save) void saveNow(vim);
-    if (effects.quit) closeEditor();
+    if (effects.quit) {
+      // In a /pr compose buffer, quit means "abandon the PR", not "close a file".
+      // For :wq the save above already started submitPr (which set the ref), so
+      // the trailing quit here must NOT cancel — guard on the in-flight ref.
+      if (prSubmittingRef.current) return;
+      if (stateRef.current.prCompose) cancelPr();
+      else closeEditor();
+    }
   }, [toast, saveNow, closeEditor]);
 
   /* LSP didChange sync, debounced on buffer text change. */

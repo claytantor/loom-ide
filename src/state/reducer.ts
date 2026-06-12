@@ -13,7 +13,7 @@ import type { FindResult } from '../services/ripgrep.js';
 import type { CommandResult } from '../services/passthru.js';
 import type { WatchBatch } from '../services/watcher.js';
 import type { VimState } from '../core/vim/index.js';
-import type { AppState, Diagnostic, InputMode, MainView } from './types.js';
+import type { AppState, Diagnostic, InputMode, MainView, PrCompose } from './types.js';
 import { deriveOmniMode } from './types.js';
 
 export const FLASH_MS = 900;
@@ -34,6 +34,8 @@ export type Action =
   | { type: 'slash-sel'; sel: number }
   | { type: 'input-mode'; mode: InputMode | null }
   | { type: 'open-file'; path: string; vim: VimState; trailingNewline: boolean }
+  | { type: 'pr-compose-open'; compose: PrCompose; vim: VimState }
+  | { type: 'pr-compose-close' }
   | { type: 'vim-set'; vim: VimState }
   | { type: 'buffer-stale'; stale: boolean }
   | { type: 'close-editor' }
@@ -62,6 +64,7 @@ export function initialState(root: string, rootName: string): AppState {
     vim: null,
     trailingNewline: true,
     bufferStale: false,
+    prCompose: null,
     omni: '',
     inputMode: null,
     slashSel: 0,
@@ -235,6 +238,37 @@ export function reduce(state: AppState, action: Action): AppState {
         outputScroll: 0,
       };
     }
+
+    case 'pr-compose-open':
+      // Ephemeral compose buffer: the label is a virtual title ('PR → dev'),
+      // NOT a tree path — so, unlike 'open-file', do not expandTo()/set selPath
+      // (it would corrupt the tree). The editor pane renders `vim` regardless.
+      return {
+        ...state,
+        prCompose: action.compose,
+        vim: action.vim,
+        openFile: action.compose.label,
+        trailingNewline: true,
+        bufferStale: false,
+        mainView: 'editor',
+        focus: 'editor',
+        omni: '',
+        preFilter: null,
+        diff: null,
+        blame: null,
+        outputScroll: 0,
+      };
+
+    case 'pr-compose-close':
+      return {
+        ...state,
+        prCompose: null,
+        vim: null,
+        openFile: null,
+        bufferStale: false,
+        mainView: 'empty',
+        focus: 'tree',
+      };
 
     case 'vim-set':
       return { ...state, vim: action.vim };
