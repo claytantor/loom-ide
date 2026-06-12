@@ -42,6 +42,13 @@ describe('keyDescFromInk', () => {
     expect(keyDescFromInk('', { return: true })).toBe('return');
     expect(keyDescFromInk('K', {})).toBe('k');
   });
+  test('named keys ignore Ink\'s unreliable meta flag (Escape reports meta=true)', () => {
+    // A lone Escape comes through as escape+meta; it must still resolve to 'escape'
+    // so keymap-driven 'back' bindings (find/diff/blame/help) fire.
+    expect(keyDescFromInk('', { escape: true, meta: true })).toBe('escape');
+    expect(keyDescFromInk('', { downArrow: true, meta: true })).toBe('down');
+    expect(lookupAction(DEFAULT_KEYMAP, 'output', keyDescFromInk('', { escape: true, meta: true }))).toBe('back');
+  });
 });
 
 describe('mergeConfig', () => {
