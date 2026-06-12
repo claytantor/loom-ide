@@ -148,6 +148,35 @@ describe('pr-compose', () => {
   });
 });
 
+describe('tree visibility (full-width editor)', () => {
+  test('toggle-tree hides the tree from the editor and shows it again', () => {
+    let s = boot();
+    s = apply(s, { type: 'focus', focus: 'editor' });
+    expect(s.treeHidden).toBe(false);
+    s = apply(s, { type: 'toggle-tree' });
+    expect(s.treeHidden).toBe(true);
+    expect(s.focus).toBe('editor');
+    s = apply(s, { type: 'toggle-tree' });
+    expect(s.treeHidden).toBe(false);
+  });
+
+  test('focusing the tree reveals it — no stranding on a hidden tree (invariant)', () => {
+    let s = boot();
+    s = apply(s, { type: 'focus', focus: 'editor' }, { type: 'toggle-tree' });
+    expect(s.treeHidden).toBe(true);
+    // Tab / Esc / :q / reveal all set focus:'tree' → the tree comes back.
+    s = apply(s, { type: 'focus', focus: 'tree' });
+    expect(s.focus).toBe('tree');
+    expect(s.treeHidden).toBe(false);
+  });
+
+  test('cannot hide a tree that is currently focused', () => {
+    let s = boot(); // focus starts on the tree
+    s = apply(s, { type: 'toggle-tree' });
+    expect(s.treeHidden).toBe(false); // invariant reverts it
+  });
+});
+
 describe('open-file', () => {
   test('expands ancestors, selects, focuses editor, clears omni', () => {
     let s = boot();

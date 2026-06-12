@@ -69,7 +69,7 @@ describe('mergeConfig', () => {
     expect(config.fuzzyMode).toBe('dim');
   });
   test('prDiffLimit / prDefaultTarget default and apply', () => {
-    expect(DEFAULT_CONFIG.prDiffLimit).toBe(1000);
+    expect(DEFAULT_CONFIG.prDiffLimit).toBe(3000);
     expect(DEFAULT_CONFIG.prDefaultTarget).toBe('');
     const { config, warnings } = mergeConfig({ prDiffLimit: 250, prDefaultTarget: '  dev  ' });
     expect(warnings).toEqual([]);

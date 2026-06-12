@@ -29,6 +29,7 @@ export type Action =
   | { type: 'dir-open'; path: string; open: boolean }
   | { type: 'reveal'; path: string }
   | { type: 'focus'; focus: 'tree' | 'editor' }
+  | { type: 'toggle-tree' }
   | { type: 'omni-set'; value: string }
   | { type: 'omni-clear'; restore: boolean }
   | { type: 'slash-sel'; sel: number }
@@ -60,6 +61,7 @@ export function initialState(root: string, rootName: string): AppState {
     selPath: null,
     focus: 'tree',
     mainView: 'empty',
+    treeHidden: false,
     openFile: null,
     vim: null,
     trailingNewline: true,
@@ -98,6 +100,14 @@ function firstRowPath(tree: TreeNode): string | null {
 }
 
 export function reduce(state: AppState, action: Action): AppState {
+  const next = applyAction(state, action);
+  // Invariant: you can never be left focused on a hidden tree — any action that
+  // moves focus back to the tree (Tab, Esc, :q, /reveal…) reveals it. This keeps
+  // the full-width-editor toggle (ctrl+b) free of per-path guards.
+  return next.treeHidden && next.focus === 'tree' ? { ...next, treeHidden: false } : next;
+}
+
+function applyAction(state: AppState, action: Action): AppState {
   switch (action.type) {
     case 'init': {
       const selPath = state.selPath ?? firstRowPath(action.tree);
@@ -176,6 +186,9 @@ export function reduce(state: AppState, action: Action): AppState {
 
     case 'focus':
       return { ...state, focus: action.focus };
+
+    case 'toggle-tree':
+      return { ...state, treeHidden: !state.treeHidden };
 
     case 'omni-set': {
       const prevMode = deriveOmniMode(state.omni, state.inputMode);

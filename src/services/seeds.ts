@@ -19,8 +19,9 @@ gutter: true
 wrap: false
 # preferred tree width in columns (clamped 24–46 against the live terminal)
 treeWidth: 32
-# /pr — diffs larger than this many lines skip the AI and use a commit-log draft
-prDiffLimit: 1000
+# /pr — above this many diff lines the AI gets a git-diff--stat summary instead
+# of the full patch (it still drafts the PR either way)
+prDiffLimit: 3000
 # /pr — default base branch for \`/pr\` with no target ('' = ask each time)
 prDefaultTarget: ''
 `;

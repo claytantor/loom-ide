@@ -78,6 +78,13 @@ export async function diffRange(root: string, target: string): Promise<string> {
   return out ?? '';
 }
 
+/** Per-file change summary of HEAD against `target` (`git diff --stat`). Compact
+   enough to send to the AI even when the full diff is too large. '' on failure. */
+export async function diffStatRange(root: string, target: string): Promise<string> {
+  const out = await git(root, ['diff', '--stat', `${target}..HEAD`]);
+  return out ?? '';
+}
+
 /** Revert a file to HEAD (the /discard command). */
 export async function discardFile(root: string, relPath: string): Promise<boolean> {
   const restored = await git(root, ['restore', '--worktree', '--staged', '--', relPath]);

@@ -11,7 +11,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { currentBranch, diffRange, logRange } from './git.js';
+import { currentBranch, diffRange, diffStatRange, logRange } from './git.js';
 import { runGhArgv, type CommandResult, type RunOptions } from './passthru.js';
 
 /* ── types ──────────────────────────────────────────────────────────────── */
@@ -25,8 +25,10 @@ export interface PrContext {
   commits: string[];
   /** Full unified diff of head against target. */
   diff: string;
-  /** Diff size in lines — gates the R7 over-limit fallback. */
+  /** Diff size in lines — over the limit, the AI gets a summary, not the patch. */
   diffLines: number;
+  /** Per-file change summary (`git diff --stat`) — sent to the AI for large diffs. */
+  diffStat: string;
   /** Contents of the repo's PR template, or null when none exists. */
   template: string | null;
 }
@@ -68,7 +70,7 @@ export interface CreatePrResult {
   result: CommandResult;
 }
 
-const DEFAULT_DIFF_LIMIT = 1000;
+const DEFAULT_DIFF_LIMIT = 3000;
 
 /* Indirection so the compiler cannot statically resolve (and therefore cannot
    error on) the optional SDK specifier — `tsc --noEmit` stays green when the
@@ -118,10 +120,11 @@ export async function findPrTemplate(root: string): Promise<string | null> {
 /** Assemble everything the draft generators need: head branch, commit subjects,
    diff, and any PR template. Never throws — empty pieces degrade to []/''/null. */
 export async function gatherPrContext(root: string, target: string): Promise<PrContext> {
-  const [head, commits, diff, template] = await Promise.all([
+  const [head, commits, diff, diffStat, template] = await Promise.all([
     currentBranch(root),
     logRange(root, target),
     diffRange(root, target),
+    diffStatRange(root, target),
     findPrTemplate(root),
   ]);
   return {
@@ -130,6 +133,7 @@ export async function gatherPrContext(root: string, target: string): Promise<PrC
     commits,
     diff,
     diffLines: diff ? diff.split('\n').length : 0,
+    diffStat,
     template,
   };
 }
@@ -138,7 +142,7 @@ export async function gatherPrContext(root: string, target: string): Promise<PrC
 
 /** Build the instruction the SDK drafts against: git-commit-style title+body,
    the commit list, the diff, and a template-fill instruction when present. */
-export function buildPrompt(ctx: PrContext): string {
+export function buildPrompt(ctx: PrContext, opts: { summarized?: boolean } = {}): string {
   const parts: string[] = [];
   parts.push(
     'You are writing a GitHub pull request description. Output Markdown only — no preamble, no code fences around the whole thing.',
@@ -163,7 +167,18 @@ export function buildPrompt(ctx: PrContext): string {
       '',
     );
   }
-  parts.push('Unified diff (head vs base):', '```diff', ctx.diff.trim() || '(no textual diff)', '```');
+  if (opts.summarized) {
+    parts.push(
+      'The full diff is large, so you are given a per-file change summary instead of the raw patch.',
+      'Write a high-level description grounded in the commits and these file changes.',
+      'Changed files (git diff --stat):',
+      '```',
+      ctx.diffStat.trim() || '(summary unavailable)',
+      '```',
+    );
+  } else {
+    parts.push('Unified diff (head vs base):', '```diff', ctx.diff.trim() || '(no textual diff)', '```');
+  }
   return parts.join('\n');
 }
 
@@ -238,14 +253,9 @@ async function loadSdkQuery(): Promise<QueryFn | null> {
    Reuses `~/.claude` ambient auth (R5) — no API key handling here. */
 export async function generatePrDescription(ctx: PrContext, opts: GenerateOptions = {}): Promise<GeneratedDraft> {
   const diffLimit = opts.diffLimit ?? DEFAULT_DIFF_LIMIT;
-
-  if (ctx.diffLines > diffLimit) {
-    return {
-      ...commitLogDraft(ctx),
-      usedAi: false,
-      note: `diff is ${ctx.diffLines} lines (> ${diffLimit}) — using commit-log draft`,
-    };
-  }
+  // A large diff no longer skips the AI — it gets a `git diff --stat` summary
+  // (+ commits) instead of the full patch, so big PRs still get a real draft.
+  const summarized = ctx.diffLines > diffLimit;
 
   const query = opts.query ?? (await loadSdkQuery());
   if (!query) {
@@ -254,14 +264,18 @@ export async function generatePrDescription(ctx: PrContext, opts: GenerateOption
 
   try {
     let text = '';
-    for await (const msg of query({ prompt: buildPrompt(ctx), options: { maxTurns: 1, allowedTools: [] } })) {
+    for await (const msg of query({ prompt: buildPrompt(ctx, { summarized }), options: { maxTurns: 1, allowedTools: [] } })) {
       text += extractAssistantText(msg);
     }
     const parsed = parseDraft(text);
     if (!parsed.title) {
       return { ...commitLogDraft(ctx), usedAi: false, note: 'AI returned no draft — using commit-log draft' };
     }
-    return { ...parsed, usedAi: true };
+    return {
+      ...parsed,
+      usedAi: true,
+      ...(summarized ? { note: `large diff (${ctx.diffLines} lines) — summarized for the AI` } : {}),
+    };
   } catch {
     return { ...commitLogDraft(ctx), usedAi: false, note: 'AI failed — using commit-log draft' };
   }

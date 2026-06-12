@@ -12,7 +12,8 @@ export interface LoomConfig {
   /** Editor: soft-wrap long lines (`:set wrap`); false truncates them (default). */
   wrap: boolean;
   treeWidth: number;
-  /** /pr: diffs larger than this (in lines) skip the AI and use a commit-log draft (R7). */
+  /** /pr: above this many diff lines, the AI gets a `git diff --stat` summary
+   * instead of the full patch (the AI still drafts the description either way). */
   prDiffLimit: number;
   /** /pr: default base branch used when `/pr` is run without a target ('' = prompt). */
   prDefaultTarget: string;
@@ -26,7 +27,7 @@ export const DEFAULT_CONFIG: LoomConfig = {
   gutter: true,
   wrap: false,
   treeWidth: 32,
-  prDiffLimit: 1000,
+  prDiffLimit: 3000,
   prDefaultTarget: '',
 };
 
