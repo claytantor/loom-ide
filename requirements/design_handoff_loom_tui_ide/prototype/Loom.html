@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Loom — TUI IDE</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+<template id="__bundler_thumbnail">
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+    <rect width="100" height="100" fill="#0B0E14"/>
+    <g font-family="monospace" font-size="9" fill="#5A6478">
+      <text x="30" y="40">▾</text><text x="30" y="52">▸</text>
+    </g>
+    <text x="30" y="64" font-family="monospace" font-size="11" fill="#22D3EE">❱</text>
+    <text x="42" y="64" font-family="monospace" font-size="9" fill="#C7D0E0">index.ts</text>
+    <text x="30" y="78" font-family="monospace" font-size="13" font-weight="700" fill="#F0A36B">›</text>
+  </svg>
+</template>
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; background: #0B0E14; overflow: hidden; }
+  body { font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace; }
+  #root { height: 100%; }
+
+  .loom {
+    position: fixed; inset: 0;
+    font-family: inherit;
+    line-height: 1.42;
+    -webkit-font-smoothing: antialiased;
+    display: flex; flex-direction: column;
+    overflow: hidden;
+    cursor: default;
+    -webkit-user-select: text; user-select: text;
+  }
+  .ruler {
+    position: absolute; visibility: hidden; pointer-events: none;
+    white-space: pre; top: -9999px; left: -9999px;
+    font: inherit; line-height: 1.42;
+  }
+  .meta {
+    position: absolute; top: 0; right: 1ch; z-index: 5;
+    font-size: 0.82em; opacity: 0.55; letter-spacing: 0.03em;
+    pointer-events: none;
+  }
+
+  .top { flex: 1; min-height: 0; display: flex; overflow: hidden; }
+
+  .pane { display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden; padding-left: 1ch; }
+  .pane.main { flex: 1; padding-left: 2ch; }
+
+  .row { display: flex; align-items: center; height: 1.42em; line-height: 1.42; white-space: pre; flex: none; }
+  .treelist, .editor-body { flex: 1; min-height: 0; overflow: hidden; }
+  .treefoot { margin-top: 0.3em; }
+  .treerow { min-width: 0; }
+
+  .divider { flex: none; overflow: hidden; }
+  .divider pre { font: inherit; line-height: 1.42; }
+
+  .rule { flex: none; height: 1.42em; line-height: 1.42; overflow: hidden; white-space: pre; }
+
+  .omni { flex: none; height: 1.7em; line-height: 1.7; align-items: center; padding: 0 1ch; }
+
+  .editor-status, .treefoot { white-space: pre; }
+  .codeline { min-width: 0; }
+
+  /* blinking block carets */
+  .caret, .omni-caret {
+    display: inline-block; width: 0.62ch; height: 1.05em;
+    vertical-align: text-bottom; margin-left: 0.5px;
+    animation: blink 1.05s steps(1) infinite;
+  }
+  .omni-caret { margin-left: 0; }
+  @keyframes blink { 0%, 50% { opacity: 1; } 50.01%, 100% { opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) { .caret, .omni-caret { animation: none; } }
+
+  /* empty / welcome */
+  .pane.empty { align-items: stretch; justify-content: center; }
+  .empty-inner { margin: auto; text-align: center; padding-bottom: 4vh; }
+
+  /* slash palette */
+  .slash-anchored { flex: none; padding: 0.3em 1ch 0.2em 1ch; }
+  .slash-list .row { height: 1.42em; }
+  .slash-row { min-width: 0; }
+  .slash-card-wrap {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    pointer-events: none; z-index: 6;
+  }
+  .slash-card {
+    pointer-events: auto;
+    min-width: 44ch; max-width: 80vw;
+    padding: 1em 1.4ch; border: 1px solid; border-radius: 2px;
+    box-shadow: 0 18px 60px rgba(0,0,0,0.55);
+  }
+
+  /* keep tweak panel crisp (it ships its own light styling) */
+  .twk-panel { font-family: ui-sans-serif, system-ui, -apple-system, sans-serif; }
+</style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+  <script src="loom-data.js"></script>
+  <script type="text/babel" src="tweaks-panel.jsx"></script>
+  <script type="text/babel" src="loom-tui.jsx"></script>
+  <script type="text/babel" src="loom-app.jsx"></script>
+</body>
+</html>

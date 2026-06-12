@@ -1,0 +1,185 @@
+import { describe, expect, test } from 'vitest';
+import React from 'react';
+import { render } from 'ink-testing-library';
+import { TreePane } from '../src/ui/TreePane.js';
+import { OmniBar } from '../src/ui/OmniBar.js';
+import { SlashPalette } from '../src/ui/SlashPalette.js';
+import { EmptyMain } from '../src/ui/OutputViews.js';
+import { buildTree, flattenVisible, setDirOpen, applyGitStatus, type GitCode } from '../src/core/tree.js';
+import { computeFilter } from '../src/core/filter.js';
+import { filterSlash } from '../src/state/commands.js';
+
+const PATHS = ['src/server/index.ts', 'src/server/app.ts', 'scripts/deploy.sh', 'package.json'];
+
+function makeTree() {
+  let t = buildTree(PATHS, 'repo');
+  t = setDirOpen(setDirOpen(t, 'src', true), 'src/server', true);
+  return applyGitStatus(t, new Map<string, GitCode>([
+    ['src/server/index.ts', 'M'],
+    ['scripts/deploy.sh', '?'],
+  ]));
+}
+
+describe('TreePane', () => {
+  test('renders header, rows, selection cursor, git dots, idle footer', () => {
+    const tree = makeTree();
+    const rows = flattenVisible(tree);
+    const { lastFrame } = render(
+      <TreePane
+        rows={rows}
+        selPath="src/server/index.ts"
+        matchByPath={new Map()}
+        flash={new Map()}
+        focused
+        query=""
+        count={0}
+        width={36}
+        height={14}
+        showFooter
+        footerHint="/edit /diff /blame on index.ts"
+      />,
+    );
+    const frame = lastFrame()!;
+    expect(frame).toContain('FILES');
+    expect(frame).toContain('❱');
+    expect(frame).toContain('index.ts');
+    expect(frame).toContain('●M');
+    expect(frame).toContain('●?');
+    expect(frame).toContain('/edit /diff /blame on index.ts');
+  });
+
+  test('filter mode shows query chip and match count footer', () => {
+    const tree = makeTree();
+    const res = computeFilter(tree, 'srvind', 'dim');
+    const { lastFrame } = render(
+      <TreePane
+        rows={res.rows}
+        selPath={res.topPath}
+        matchByPath={res.matchByPath}
+        flash={new Map()}
+        focused
+        query="srvind"
+        count={res.count}
+        width={50}
+        height={14}
+        showFooter
+        footerHint=""
+      />,
+    );
+    const frame = lastFrame()!;
+    expect(frame).toContain('filter: srvind');
+    expect(frame).toMatch(/1 match/);
+    expect(frame).toContain('Esc clear');
+  });
+
+  test('hide mode drops non-matching branches from render', () => {
+    const tree = makeTree();
+    const res = computeFilter(tree, 'deploy', 'hide');
+    const { lastFrame } = render(
+      <TreePane
+        rows={res.rows}
+        selPath={res.topPath}
+        matchByPath={res.matchByPath}
+        flash={new Map()}
+        focused
+        query="deploy"
+        count={res.count}
+        width={38}
+        height={14}
+        showFooter
+        footerHint=""
+      />,
+    );
+    const frame = lastFrame()!;
+    expect(frame).toContain('deploy.sh');
+    expect(frame).not.toContain('package.json');
+  });
+});
+
+describe('OmniBar', () => {
+  test('wide layout shows the full status readout', () => {
+    const { lastFrame } = render(
+      <OmniBar
+        value=""
+        mode="idle"
+        inputMode={null}
+        branch="main"
+        isRepo
+        vimDirty={false}
+        onDisk={2}
+        pulse={false}
+        layout="wide"
+        spinner={null}
+        width={100}
+      />,
+    );
+    const frame = lastFrame()!;
+    expect(frame).toContain('›');
+    expect(frame).toContain('[ready]');
+    expect(frame).toContain('2 changed on disk');
+    expect(frame).toContain('⎇ main ✓');
+  });
+
+  test('mid layout abbreviates; filter mode labeled', () => {
+    const { lastFrame } = render(
+      <OmniBar
+        value="srv"
+        mode="filter"
+        inputMode={null}
+        branch="main"
+        isRepo
+        vimDirty
+        onDisk={3}
+        pulse={false}
+        layout="mid"
+        spinner={null}
+        width={70}
+      />,
+    );
+    const frame = lastFrame()!;
+    expect(frame).toContain('[filter]');
+    expect(frame).not.toContain('changed on disk');
+    expect(frame).toContain('main ±');
+  });
+
+  test('confirm prompt renders question in input mode', () => {
+    const { lastFrame } = render(
+      <OmniBar
+        value=""
+        mode="input"
+        inputMode={{ kind: 'confirm', question: 'discard changes to a.ts?', action: { kind: 'quit' } }}
+        branch="main"
+        isRepo
+        vimDirty={false}
+        onDisk={0}
+        pulse={false}
+        layout="wide"
+        spinner={null}
+        width={100}
+      />,
+    );
+    expect(lastFrame()!).toContain('discard changes to a.ts? [y/n]');
+  });
+});
+
+describe('SlashPalette', () => {
+  test('renders filtered commands with selection-scoped descriptions and danger color', () => {
+    const items = filterSlash('/di');
+    const { lastFrame } = render(
+      <SlashPalette items={items} themeItems={null} sel={0} query="/di" selName="index.ts" width={80} />,
+    );
+    const frame = lastFrame()!;
+    expect(frame).toContain('/diff');
+    expect(frame).toContain('git diff of index.ts');
+    expect(frame).toContain('/discard');
+  });
+});
+
+describe('EmptyMain', () => {
+  test('welcome wordmark and hints', () => {
+    const { lastFrame } = render(<EmptyMain width={60} height={10} watching />);
+    const frame = lastFrame()!;
+    expect(frame).toContain('l o o m');
+    expect(frame).toContain('type to filter');
+  });
+});
