@@ -3,7 +3,38 @@ import { filterSlash, filterThemeEntries, slashMatchPositions, themeEntries } fr
 
 describe('filterSlash', () => {
   test('bare slash lists everything', () => {
-    expect(filterSlash('/').length).toBe(9);
+    expect(filterSlash('/').length).toBe(13);
+  });
+  test('/pr is a distinct command that captures its args (target + flags)', () => {
+    const items = filterSlash('/pr dev --draft --no-ai');
+    expect(items.length).toBe(1);
+    expect(items[0]!.name).toBe('/pr');
+    expect(items[0]!.arg).toBe('dev --draft --no-ai');
+    expect(items[0]!.takesArg).toBe(true);
+  });
+  test('/p prefix offers /pr', () => {
+    expect(filterSlash('/p').map((c) => c.name)).toContain('/pr');
+  });
+  test('/gh and /git are distinct commands that capture their args', () => {
+    const gh = filterSlash('/gh pr list --limit 5');
+    expect(gh.length).toBe(1);
+    expect(gh[0]!.name).toBe('/gh');
+    expect(gh[0]!.arg).toBe('pr list --limit 5');
+
+    const git = filterSlash('/git status -sb');
+    expect(git.length).toBe(1);
+    expect(git[0]!.name).toBe('/git');
+    expect(git[0]!.arg).toBe('status -sb');
+  });
+  test('/g prefix offers both git and gh', () => {
+    const names = filterSlash('/g').map((c) => c.name);
+    expect(names).toContain('/git');
+    expect(names).toContain('/gh');
+  });
+  test('/help resolves by prefix', () => {
+    const items = filterSlash('/help');
+    expect(items[0]!.name).toBe('/help');
+    expect(filterSlash('/he').map((c) => c.name)).toContain('/help');
   });
   test('/di → prefix matches first, then substring (handoff: /edit /diff /discard)', () => {
     const names = filterSlash('/di').map((c) => c.name);

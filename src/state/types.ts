@@ -8,15 +8,31 @@ import type { Keymap } from '../core/keymap.js';
 import type { ThemeOverride } from '../core/theme.js';
 import type { DiffLine, BlameLine } from '../core/gitParse.js';
 import type { FindResult } from '../services/ripgrep.js';
+import type { CommandResult, PassthruLabel } from '../services/passthru.js';
 import type { VimState } from '../core/vim/index.js';
 
 export type Focus = 'tree' | 'editor';
-export type MainView = 'empty' | 'editor' | 'find' | 'diff' | 'blame';
+export type MainView = 'empty' | 'editor' | 'find' | 'diff' | 'blame' | 'help' | 'command';
 
 export type InputMode =
   | { kind: 'find' }
+  | { kind: 'passthru'; label: PassthruLabel }
+  | { kind: 'pr' }
   | { kind: 'rename'; target: string }
   | { kind: 'confirm'; question: string; action: ConfirmAction };
+
+/** Live /pr compose session: the AI draft is hosted in the vim editor as an
+   ephemeral buffer (no disk file). Saving it creates the PR; quitting cancels. */
+export interface PrCompose {
+  /** Base branch the PR merges into. */
+  target: string;
+  /** Head branch (current branch) the PR is opened from. */
+  head: string;
+  /** Open the PR as a draft (R4). */
+  draft: boolean;
+  /** Virtual label shown in the editor status line, e.g. 'PR → dev'. */
+  label: string;
+}
 
 export type ConfirmAction =
   | { kind: 'discard'; path: string }
@@ -46,6 +62,8 @@ export interface AppState {
   vim: VimState | null;
   trailingNewline: boolean;
   bufferStale: boolean;
+  /** Non-null while an AI PR draft is being composed in the editor buffer. */
+  prCompose: PrCompose | null;
 
   omni: string;
   inputMode: InputMode | null;
@@ -57,6 +75,7 @@ export interface AppState {
   findSel: number;
   diff: DiffLine[] | null;
   blame: BlameLine[] | null;
+  command: CommandResult | null;
   outputScroll: number;
   outputTitle: string;
 

@@ -15,8 +15,14 @@ glyphs: unicode
 fuzzyMode: dim
 # line-number gutter in the editor (toggle live with ctrl+g)
 gutter: true
+# soft-wrap long lines in the editor (toggle live with :set wrap / :set nowrap)
+wrap: false
 # preferred tree width in columns (clamped 24–46 against the live terminal)
 treeWidth: 32
+# /pr — diffs larger than this many lines skip the AI and use a commit-log draft
+prDiffLimit: 1000
+# /pr — default base branch for \`/pr\` with no target ('' = ask each time)
+prDefaultTarget: ''
 `;
 
 export const SEED_KEYBINDINGS_YML = `# loom — keybindings (~/.loom/keybindings.yml)

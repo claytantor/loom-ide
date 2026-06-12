@@ -20,18 +20,22 @@ import { scanRepo, SCAN_CAP } from '../services/fsScan.js';
 import { watchRepo, type RepoWatcher, type WatchBatch } from '../services/watcher.js';
 import { blameFile, currentBranch, diffFile, discardFile, isRepo as gitIsRepo, repoStatus } from '../services/git.js';
 import { findInProject } from '../services/ripgrep.js';
+import { parseArgv, runByLabel, runGit, type CommandResult, type PassthruLabel } from '../services/passthru.js';
+import {
+  commitLogDraft, createPr, gatherPrContext, generatePrDescription, parseDraft, preflightAuth,
+} from '../services/pr.js';
 import { loadBuffer, renamePath, saveBuffer } from '../services/bufferIo.js';
 import { ensureSeeded, loadSettings, saveConfig } from '../services/configIo.js';
 import { LspManager, pathToUri, resolveLanguage, uriToPath, type LspClient } from '../services/lsp/index.js';
 
 import { initialState, reduce, FLASH_MS } from '../state/reducer.js';
-import { deriveOmniMode, type ConfirmAction } from '../state/types.js';
+import { deriveOmniMode, type ConfirmAction, type PrCompose } from '../state/types.js';
 import { filterSlash, filterThemeEntries, themeEntries, type SlashItem, type ThemeEntry } from '../state/commands.js';
 
 import { ChromeContext } from '../ui/context.js';
 import { TreePane } from '../ui/TreePane.js';
 import { Editor } from '../ui/Editor.js';
-import { BlameView, DiffView, EmptyMain, FindView, flattenFind } from '../ui/OutputViews.js';
+import { BlameView, CommandView, DiffView, EmptyMain, FindView, HelpView, HELP_ROWS, flattenFind } from '../ui/OutputViews.js';
 import { OmniBar } from '../ui/OmniBar.js';
 import { SlashPalette } from '../ui/SlashPalette.js';
 
@@ -45,6 +49,30 @@ const TOAST_MS = 2800;
 const GHOST_MS = 800;
 const PULSE_MS = 900;
 const MAX_PALETTE_ROWS = 9;
+
+export interface PrArgs {
+  target: string;
+  draft: boolean;
+  noAi: boolean;
+}
+
+/** Parse `/pr` arguments: first non-flag token is the base branch; `--draft`
+   (R4) and `--no-ai` (R3) are recognized flags. Tokenized quote-aware. */
+export function parsePrArgs(arg: string): PrArgs {
+  const out: PrArgs = { target: '', draft: false, noAi: false };
+  for (const tok of parseArgv(arg)) {
+    if (tok === '--draft') out.draft = true;
+    else if (tok === '--no-ai') out.noAi = true;
+    else if (!out.target && !tok.startsWith('-')) out.target = tok;
+  }
+  return out;
+}
+
+/** A CommandResult synthesized in-app (no spawn) so a fail-fast path can render
+   in the same main-area panel /gh /git use. */
+function synthCommandResult(label: string, argv: string[], lines: string[], error: string): CommandResult {
+  return { label, argv, lines, code: 1, ok: false, error, truncated: false };
+}
 
 export function App({ root }: AppProps): React.JSX.Element {
   const { exit } = useApp();
@@ -100,6 +128,9 @@ export function App({ root }: AppProps): React.JSX.Element {
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lspSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lspSyncedTextRef = useRef<string | null>(null);
+  // Set synchronously while a /pr submit is in flight, so the trailing :wq quit
+  // (save+quit in one burst) is a guarded no-op instead of cancelling the PR.
+  const prSubmittingRef = useRef(false);
 
   const toast = useCallback((text: string, danger = false): void => {
     dispatch({ type: 'toast', text, danger });
@@ -238,6 +269,12 @@ export function App({ root }: AppProps): React.JSX.Element {
 
   const saveNow = useCallback(async (vim: VimState): Promise<void> => {
     const s = stateRef.current;
+    // Compose-buffer save (the /pr crux): :w, :wq, and Ctrl-S all funnel here.
+    // Intercept before any disk write — there is no real file behind this buffer.
+    if (s.prCompose) {
+      void submitPr(s.prCompose, vim);
+      return;
+    }
     if (!s.openFile) return;
     try {
       await saveBuffer(root, s.openFile, vim.lines, s.trailingNewline);
@@ -264,7 +301,14 @@ export function App({ root }: AppProps): React.JSX.Element {
   const handleVimEffects = useCallback((effects: VimEffects, vim: VimState): void => {
     if (effects.message) toast(effects.message);
     if (effects.save) void saveNow(vim);
-    if (effects.quit) closeEditor();
+    if (effects.quit) {
+      // In a /pr compose buffer, quit means "abandon the PR", not "close a file".
+      // For :wq the save above already started submitPr (which set the ref), so
+      // the trailing quit here must NOT cancel — guard on the in-flight ref.
+      if (prSubmittingRef.current) return;
+      if (stateRef.current.prCompose) cancelPr();
+      else closeEditor();
+    }
   }, [toast, saveNow, closeEditor]);
 
   /* LSP didChange sync, debounced on buffer text change. */
@@ -287,6 +331,103 @@ export function App({ root }: AppProps): React.JSX.Element {
     dispatch({ type: 'spinner', label: null });
     dispatch({ type: 'view', view: 'find', title: `/find ${query}`, find: res });
   }, [root]);
+
+  const runPassthru = useCallback(async (label: PassthruLabel, argString: string): Promise<void> => {
+    dispatch({ type: 'spinner', label: `/${label}` });
+    const result = await runByLabel(label, root, argString, { cols: refs.current.mainChars });
+    dispatch({ type: 'spinner', label: null });
+    dispatch({ type: 'view', view: 'command', title: `${label} ${argString}`, command: result });
+    if (result.error) toast(result.error, true);
+  }, [root, toast]);
+
+  /* ── /pr — AI-assisted pull request ─────────────────────────────────────
+   * push HEAD → preflight gh auth → gather commits+diff → AI (or commit-log)
+   * draft → host the draft in the editor as an ephemeral compose buffer. The
+   * save (:w / :wq / Ctrl-S) is intercepted in saveNow → submitPr creates the PR. */
+  const runPr = useCallback(async (target: string, draft: boolean, noAi: boolean): Promise<void> => {
+    const cols = refs.current.mainChars;
+    const head = await currentBranch(root);
+    if (!head) {
+      toast('not a git repository', true);
+      return;
+    }
+    if (head === target) {
+      toast(`already on ${target} — check out a feature branch first`, true);
+      return;
+    }
+
+    dispatch({ type: 'spinner', label: '/pr' });
+    try {
+      // R6 — fail fast before pushing or drafting.
+      const auth = await preflightAuth(root, { cols });
+      if (!auth.ok) {
+        dispatch({ type: 'view', view: 'command', title: 'pr auth status', command: auth.result });
+        toast('gh not authenticated — run: gh auth login', true);
+        return;
+      }
+
+      const push = await runGit(root, 'push origin HEAD', { cols });
+      if (!push.ok) {
+        dispatch({ type: 'view', view: 'command', title: 'pr push origin HEAD', command: push });
+        toast(push.error ?? 'push failed', true);
+        return;
+      }
+
+      const ctx = await gatherPrContext(root, target);
+      if (ctx.commits.length === 0 && ctx.diff.trim() === '') {
+        toast(`nothing to PR — ${head} has no commits beyond ${target}`, true);
+        return;
+      }
+
+      const draftDoc = noAi
+        ? { ...commitLogDraft(ctx), usedAi: false as const }
+        : await generatePrDescription(ctx, { diffLimit: stateRef.current.config.prDiffLimit });
+      if ('note' in draftDoc && draftDoc.note) toast(draftDoc.note);
+
+      const compose: PrCompose = { target, head, draft, label: `PR → ${target}` };
+      const vim = createVim(`${draftDoc.title}\n\n${draftDoc.body}\n`);
+      prSubmittingRef.current = false;
+      dispatch({ type: 'pr-compose-open', compose, vim });
+    } catch (err) {
+      toast((err as Error).message, true);
+    } finally {
+      dispatch({ type: 'spinner', label: null });
+    }
+  }, [root, toast]);
+
+  const submitPr = useCallback(async (compose: PrCompose, vim: VimState): Promise<void> => {
+    const { title, body } = parseDraft(getText(vim));
+    if (!title) {
+      toast('PR needs a title on the first line — add one or :q! to cancel', true);
+      return; // keep the compose buffer open
+    }
+    // Mark in-flight synchronously so a trailing :wq quit doesn't cancel us.
+    prSubmittingRef.current = true;
+    dispatch({ type: 'spinner', label: '/pr' });
+    try {
+      const { url, result } = await createPr(
+        root,
+        { target: compose.target, head: compose.head, title, body, draft: compose.draft },
+        { cols: refs.current.mainChars },
+      );
+      dispatch({ type: 'pr-compose-close' });
+      dispatch({ type: 'view', view: 'command', title: `pr → ${compose.target}`, command: result });
+      if (url) toast(`PR ${result.ok ? 'created' : 'exists'}: ${url}`);
+      else if (result.ok) toast('PR created');
+      else toast(result.error ?? 'gh pr create failed', true);
+    } catch (err) {
+      toast((err as Error).message, true);
+    } finally {
+      prSubmittingRef.current = false;
+      dispatch({ type: 'spinner', label: null });
+    }
+  }, [root, toast]);
+
+  const cancelPr = useCallback((): void => {
+    prSubmittingRef.current = false;
+    dispatch({ type: 'pr-compose-close' });
+    toast('PR cancelled');
+  }, [toast]);
 
   const runDiff = useCallback(async (rel: string): Promise<void> => {
     dispatch({ type: 'spinner', label: '/diff' });
@@ -462,10 +603,32 @@ export function App({ root }: AppProps): React.JSX.Element {
         if (item.arg) void runFind(item.arg);
         else dispatch({ type: 'input-mode', mode: { kind: 'find' } });
         return;
+      case '/git':
+        clear();
+        if (item.arg) void runPassthru('git', item.arg);
+        else dispatch({ type: 'input-mode', mode: { kind: 'passthru', label: 'git' } });
+        return;
+      case '/gh':
+        clear();
+        if (item.arg) void runPassthru('gh', item.arg);
+        else dispatch({ type: 'input-mode', mode: { kind: 'passthru', label: 'gh' } });
+        return;
+      case '/pr': {
+        clear();
+        const args = parsePrArgs(item.arg);
+        if (args.target) void runPr(args.target, args.draft, args.noAi);
+        else if (s.config.prDefaultTarget) void runPr(s.config.prDefaultTarget, args.draft, args.noAi);
+        else dispatch({ type: 'input-mode', mode: { kind: 'pr' } });
+        return;
+      }
       case '/theme':
         // Open the theme picker: keep slash mode with a trailing space.
         pushOmni('/theme ');
         dispatch({ type: 'slash-sel', sel: 0 });
+        return;
+      case '/help':
+        clear();
+        dispatch({ type: 'view', view: 'help', title: '/help' });
         return;
       case '/quit':
         clear();
@@ -479,7 +642,7 @@ export function App({ root }: AppProps): React.JSX.Element {
       default:
         clear();
     }
-  }, [requestOpen, runDiff, runBlame, runFind, toast, doQuit]);
+  }, [requestOpen, runDiff, runBlame, runFind, runPassthru, runPr, toast, doQuit]);
 
   const submitEx = useCallback((cmd: string): void => {
     const s = stateRef.current;
@@ -492,6 +655,22 @@ export function App({ root }: AppProps): React.JSX.Element {
     if (trimmed === 'e' || trimmed === 'e!') {
       if (s.vim.dirty && trimmed !== 'e!') toast('no write since last change (:e! overrides)');
       else void openFileAt(s.openFile);
+      return;
+    }
+    // `:set wrap` and friends — a display option, handled at the app layer (it
+    // lives in config, not the engine) like the `:e` reload above.
+    const setMatch = /^se(?:t)?\s+(.+)$/.exec(trimmed);
+    if (setMatch) {
+      const opt = setMatch[1]!.trim();
+      if (opt === 'wrap' || opt === 'nowrap' || opt === 'wrap!' || opt === 'invwrap') {
+        const next = opt === 'wrap' ? true : opt === 'nowrap' ? false : !s.config.wrap;
+        dispatch({ type: 'config', config: { ...s.config, wrap: next } });
+        toast(next ? 'wrap' : 'nowrap');
+      } else if (opt === 'wrap?') {
+        toast(s.config.wrap ? 'wrap' : 'nowrap');
+      } else {
+        toast(`unsupported option: ${opt} — only 'wrap' is supported`, true);
+      }
       return;
     }
     const { state: vim, effects } = runEx(s.vim, trimmed);
@@ -540,8 +719,8 @@ export function App({ root }: AppProps): React.JSX.Element {
     : clamp(Math.min(state.config.treeWidth, layout === 'mid' ? 30 : 40), 24, Math.max(24, dims.cols - 30));
   const mainChars = layout === 'stacked' ? dims.cols : dims.cols - treeChars - 1;
 
-  const refs = useRef({ rows, effSel, findHits, slashItems, themeItems, editorBody: contentRows - 3, omniMode });
-  refs.current = { rows, effSel, findHits, slashItems, themeItems, editorBody: contentRows - 3, omniMode };
+  const refs = useRef({ rows, effSel, findHits, slashItems, themeItems, editorBody: contentRows - 3, mainChars, omniMode });
+  refs.current = { rows, effSel, findHits, slashItems, themeItems, editorBody: contentRows - 3, mainChars, omniMode };
 
   /* ── vim key feed ──────────────────────────────────────────────────── */
   const feedVim = useCallback((tokens: string[]): void => {
@@ -601,6 +780,16 @@ export function App({ root }: AppProps): React.JSX.Element {
           dispatch({ type: 'input-mode', mode: null });
           clearOmni(false);
           if (value) void runFind(value);
+        } else if (im.kind === 'passthru') {
+          dispatch({ type: 'input-mode', mode: null });
+          clearOmni(false);
+          if (value) void runPassthru(im.label, value);
+        } else if (im.kind === 'pr') {
+          dispatch({ type: 'input-mode', mode: null });
+          clearOmni(false);
+          const args = parsePrArgs(value);
+          if (args.target) void runPr(args.target, args.draft, args.noAi);
+          else toast('usage: /pr <base-branch> [--draft] [--no-ai]', true);
         } else {
           void submitRename(im.target, value);
         }
@@ -788,9 +977,12 @@ export function App({ root }: AppProps): React.JSX.Element {
       return;
     }
 
-    if (s.mainView === 'diff' || s.mainView === 'blame') {
+    if (s.mainView === 'diff' || s.mainView === 'blame' || s.mainView === 'help' || s.mainView === 'command') {
       const action = lookupAction(s.keymap, 'output', desc);
-      const total = s.mainView === 'diff' ? (s.diff?.length ?? 0) : (s.blame?.length ?? 0);
+      const total = s.mainView === 'diff' ? (s.diff?.length ?? 0)
+        : s.mainView === 'blame' ? (s.blame?.length ?? 0)
+        : s.mainView === 'command' ? (s.command?.lines.length ?? 0)
+        : HELP_ROWS.length;
       const page = Math.max(1, refs.current.editorBody);
       const maxScroll = Math.max(0, total - page);
       if (input.length > 0 && input[0] === '/' && !key.ctrl && !key.meta) {
@@ -908,6 +1100,10 @@ export function App({ root }: AppProps): React.JSX.Element {
     mainPane = <DiffView title={state.outputTitle} lines={state.diff} scroll={state.outputScroll} width={mainChars} height={contentRows} />;
   } else if (state.mainView === 'blame' && state.blame) {
     mainPane = <BlameView title={state.outputTitle} lines={state.blame} scroll={state.outputScroll} width={mainChars} height={contentRows} />;
+  } else if (state.mainView === 'help') {
+    mainPane = <HelpView scroll={state.outputScroll} width={mainChars} height={contentRows} />;
+  } else if (state.mainView === 'command' && state.command) {
+    mainPane = <CommandView result={state.command} scroll={state.outputScroll} width={mainChars} height={contentRows} />;
   } else if (state.mainView === 'editor' && state.vim && state.openFile) {
     mainPane = (
       <Editor
@@ -915,11 +1111,13 @@ export function App({ root }: AppProps): React.JSX.Element {
         path={state.openFile}
         focused={state.focus === 'editor'}
         gutter={state.config.gutter}
+        wrap={state.config.wrap}
         branch={state.branch}
         stale={state.bufferStale}
-        diagnostics={state.diagnostics.get(state.openFile) ?? []}
+        diagnostics={state.prCompose ? [] : (state.diagnostics.get(state.openFile) ?? [])}
         width={mainChars}
         height={contentRows}
+        {...(state.prCompose ? { composeHint: ':w create PR · :q! cancel' } : {})}
       />
     );
   } else {

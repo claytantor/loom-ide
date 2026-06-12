@@ -4,8 +4,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Box, Text } from 'ink';
 import type { FindResult } from '../services/ripgrep.js';
+import type { CommandResult } from '../services/passthru.js';
 import type { BlameLine, DiffLine } from '../core/gitParse.js';
 import { endTruncate } from '../core/text.js';
+import { SLASH_COMMANDS } from '../state/commands.js';
 import { useChrome } from './context.js';
 
 const CHROME_ROWS = 3; // header + underline + status hint
@@ -192,6 +194,141 @@ export function BlameView({ title, lines, scroll, width, height }: BlameViewProp
   );
 }
 
+/* ── /help ──────────────────────────────────────────────────────────────── */
+
+export type HelpRow =
+  | { kind: 'section'; text: string }
+  | { kind: 'bind'; keys: string; desc: string; danger?: boolean }
+  | { kind: 'note'; text: string }
+  | { kind: 'blank' };
+
+const HELP_KEY_COL = 14;
+
+/** Static help model. Command rows are generated from the registry so they
+ * never drift; key rows use word forms so they read the same in any glyph set. */
+export const HELP_ROWS: HelpRow[] = [
+  { kind: 'section', text: 'omni-bar — the bottom input' },
+  { kind: 'bind', keys: 'type text', desc: 'fuzzy-filter the file tree' },
+  { kind: 'bind', keys: '/', desc: 'open the slash command palette' },
+  { kind: 'bind', keys: ':', desc: 'vim ex command (with a file open)' },
+  { kind: 'blank' },
+  { kind: 'section', text: 'file tree' },
+  { kind: 'bind', keys: 'up down', desc: 'move selection (or j k)' },
+  { kind: 'bind', keys: 'right', desc: 'expand dir / open file (or l)' },
+  { kind: 'bind', keys: 'left', desc: 'collapse dir / go to parent (or h)' },
+  { kind: 'bind', keys: 'enter', desc: 'open file / toggle dir' },
+  { kind: 'bind', keys: 'esc', desc: 'clear the filter' },
+  { kind: 'bind', keys: 'tab', desc: 'focus the editor' },
+  { kind: 'blank' },
+  { kind: 'section', text: 'editor — full vim' },
+  { kind: 'bind', keys: 'tab  esc', desc: 'back to the tree' },
+  { kind: 'bind', keys: 'ctrl-s  :w', desc: 'save the file' },
+  { kind: 'bind', keys: ':q  :wq', desc: 'close the editor (loom stays open)' },
+  { kind: 'bind', keys: 'ctrl-g', desc: 'toggle the line-number gutter' },
+  { kind: 'bind', keys: 'K', desc: 'hover info (language server)' },
+  { kind: 'bind', keys: 'g d', desc: 'go to definition (language server)' },
+  { kind: 'blank' },
+  { kind: 'section', text: 'commands — / then a name; many act on the selected file' },
+  ...SLASH_COMMANDS.map((c): HelpRow => ({
+    kind: 'bind',
+    keys: c.name,
+    desc: c.desc.replace('{sel}', 'the selected file'),
+    ...(c.danger ? { danger: true } : {}),
+  })),
+  { kind: 'blank' },
+  { kind: 'section', text: 'output views — find / diff / blame / help' },
+  { kind: 'bind', keys: 'up down', desc: 'scroll / move' },
+  { kind: 'bind', keys: 'enter', desc: 'open at match (find)' },
+  { kind: 'bind', keys: 'esc', desc: 'close, back to the tree' },
+  { kind: 'blank' },
+  { kind: 'note', text: '/pr opens an AI draft in the editor — :w (or ctrl-s) creates the PR, :q! cancels.' },
+  { kind: 'note', text: 'esc always steps back one level — only /quit exits loom.' },
+  { kind: 'note', text: 'keys are rebindable in ~/.loom/keybindings.yml' },
+];
+
+export interface HelpViewProps {
+  scroll: number;
+  width: number;
+  height: number;
+}
+
+export function HelpView({ scroll, width, height }: HelpViewProps): React.JSX.Element {
+  const { theme, g } = useChrome();
+  const bodyHeight = Math.max(1, height - CHROME_ROWS);
+  const visible = HELP_ROWS.slice(scroll, scroll + bodyHeight);
+  const more = scroll + bodyHeight < HELP_ROWS.length;
+  const header = (
+    <Text wrap="truncate">
+      <Text color={theme.accent}>/help</Text>
+      <Text color={theme.dim}>{'  '}keys &amp; commands</Text>
+    </Text>
+  );
+  return (
+    <OutputShell
+      width={width}
+      height={height}
+      header={header}
+      hint={`${g.up}${g.down} scroll · Esc close${more ? ` · more ${g.down}` : ''}`}
+    >
+      {visible.map((row, i) => (
+        <HelpLine key={scroll + i} row={row} />
+      ))}
+    </OutputShell>
+  );
+}
+
+function HelpLine({ row }: { row: HelpRow }): React.JSX.Element {
+  const { theme } = useChrome();
+  switch (row.kind) {
+    case 'blank':
+      return <Text> </Text>;
+    case 'section':
+      return <Text color={theme.secondary} bold wrap="truncate">{row.text}</Text>;
+    case 'note':
+      return <Text color={theme.dim} wrap="truncate">{row.text}</Text>;
+    case 'bind':
+      return (
+        <Text wrap="truncate">
+          <Text color={row.danger ? theme.danger : theme.accent}>{'  ' + row.keys.padEnd(HELP_KEY_COL)}</Text>
+          <Text color={theme.fg}>{row.desc}</Text>
+        </Text>
+      );
+  }
+}
+
+/* ── /gh and /git CLI passthrough output ────────────────────────────────── */
+
+export interface CommandViewProps {
+  result: CommandResult;
+  scroll: number;
+  width: number;
+  height: number;
+}
+
+export function CommandView({ result, scroll, width, height }: CommandViewProps): React.JSX.Element {
+  const { theme, g } = useChrome();
+  const bodyHeight = Math.max(1, height - CHROME_ROWS);
+  const visible = result.lines.slice(scroll, scroll + bodyHeight);
+  const header = (
+    <Text wrap="truncate">
+      <Text color={theme.dim}>{result.label} </Text>
+      <Text color={result.ok ? theme.accent : theme.danger}>{result.argv.join(' ')}</Text>
+      <Text color={theme.dim}>
+        {'  '}
+        {result.ok ? `${result.lines.length} line${result.lines.length === 1 ? '' : 's'}` : (result.error ?? `exit ${result.code}`)}
+        {result.truncated ? ' · capped' : ''}
+      </Text>
+    </Text>
+  );
+  return (
+    <OutputShell width={width} height={height} header={header} hint={`${g.up}${g.down} scroll · Esc close`}>
+      {visible.map((line, i) => (
+        <Text key={scroll + i} color={result.ok ? theme.fg : theme.gitD} wrap="truncate">{line || ' '}</Text>
+      ))}
+    </OutputShell>
+  );
+}
+
 /* ── empty / welcome ────────────────────────────────────────────────────── */
 
 export function EmptyMain({ width, height, watching }: { width: number; height: number; watching: boolean }): React.JSX.Element {
@@ -200,7 +337,7 @@ export function EmptyMain({ width, height, watching }: { width: number; height: 
     <Box width={width} height={height} alignItems="center" justifyContent="center" flexDirection="column">
       <Text color={theme.secondary} bold>l o o m</Text>
       <Box marginTop={1} flexDirection="column" alignItems="center">
-        <Text color={theme.dim}>type to filter · {g.enter} to open · / for commands</Text>
+        <Text color={theme.dim}>type to filter · {g.enter} to open · / for commands · /help for keys</Text>
         <Text color={theme.dim}>{watching ? `${g.branch} watching the working tree — live` : 'not a git repository'}</Text>
       </Box>
     </Box>

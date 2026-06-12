@@ -123,6 +123,7 @@ export function keyDescFromInk(
   },
 ): KeyDesc {
   let base = '';
+  let named = true;
   if (key.upArrow) base = 'up';
   else if (key.downArrow) base = 'down';
   else if (key.leftArrow) base = 'left';
@@ -134,7 +135,15 @@ export function keyDescFromInk(
   else if (key.delete) base = 'delete';
   else if (key.pageUp) base = 'pageup';
   else if (key.pageDown) base = 'pagedown';
-  else base = input.toLowerCase();
+  else {
+    base = input.toLowerCase();
+    named = false;
+  }
+  // Ink conflates ESC-prefixed input with `meta` — a lone Escape reports
+  // meta=true, which would turn 'escape' into 'meta+escape' and never match a
+  // binding. Named keys carry their own flag, so ignore modifiers on them and
+  // only honor ctrl/meta on plain character keys (ctrl+s, ctrl+g, …).
+  if (named) return base;
   const mods: string[] = [];
   if (key.ctrl) mods.push('ctrl');
   if (key.meta) mods.push('meta');

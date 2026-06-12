@@ -42,6 +42,13 @@ describe('keyDescFromInk', () => {
     expect(keyDescFromInk('', { return: true })).toBe('return');
     expect(keyDescFromInk('K', {})).toBe('k');
   });
+  test('named keys ignore Ink\'s unreliable meta flag (Escape reports meta=true)', () => {
+    // A lone Escape comes through as escape+meta; it must still resolve to 'escape'
+    // so keymap-driven 'back' bindings (find/diff/blame/help) fire.
+    expect(keyDescFromInk('', { escape: true, meta: true })).toBe('escape');
+    expect(keyDescFromInk('', { downArrow: true, meta: true })).toBe('down');
+    expect(lookupAction(DEFAULT_KEYMAP, 'output', keyDescFromInk('', { escape: true, meta: true }))).toBe('back');
+  });
 });
 
 describe('mergeConfig', () => {
@@ -60,6 +67,33 @@ describe('mergeConfig', () => {
     expect(warnings.length).toBe(3);
     expect(config.accent).toBe(DEFAULT_CONFIG.accent);
     expect(config.fuzzyMode).toBe('dim');
+  });
+  test('prDiffLimit / prDefaultTarget default and apply', () => {
+    expect(DEFAULT_CONFIG.prDiffLimit).toBe(1000);
+    expect(DEFAULT_CONFIG.prDefaultTarget).toBe('');
+    const { config, warnings } = mergeConfig({ prDiffLimit: 250, prDefaultTarget: '  dev  ' });
+    expect(warnings).toEqual([]);
+    expect(config.prDiffLimit).toBe(250);
+    expect(config.prDefaultTarget).toBe('dev'); // trimmed
+  });
+  test('prDiffLimit floors at 0 and rounds; non-number warns', () => {
+    expect(mergeConfig({ prDiffLimit: -5 }).config.prDiffLimit).toBe(0);
+    expect(mergeConfig({ prDiffLimit: 12.7 }).config.prDiffLimit).toBe(13);
+    const { config, warnings } = mergeConfig({ prDiffLimit: 'lots' });
+    expect(warnings.some((w) => w.includes('prDiffLimit'))).toBe(true);
+    expect(config.prDiffLimit).toBe(DEFAULT_CONFIG.prDiffLimit);
+  });
+  test('non-string prDefaultTarget warns and keeps default', () => {
+    const { config, warnings } = mergeConfig({ prDefaultTarget: 123 });
+    expect(warnings.some((w) => w.includes('prDefaultTarget'))).toBe(true);
+    expect(config.prDefaultTarget).toBe('');
+  });
+  test('wrap defaults off, applies a boolean, warns on non-boolean', () => {
+    expect(DEFAULT_CONFIG.wrap).toBe(false);
+    expect(mergeConfig({ wrap: true }).config.wrap).toBe(true);
+    const { config, warnings } = mergeConfig({ wrap: 'yes' });
+    expect(warnings.some((w) => w.includes('wrap'))).toBe(true);
+    expect(config.wrap).toBe(false);
   });
 });
 

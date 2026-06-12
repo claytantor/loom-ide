@@ -60,6 +60,24 @@ export async function blameFile(root: string, relPath: string): Promise<string |
   return git(root, ['blame', '--line-porcelain', '--', relPath]);
 }
 
+/** Commit subjects on HEAD that are not on `target` (`git log target..HEAD`).
+   Returns [] when there are none, git fails, or `target` is unknown. */
+export async function logRange(root: string, target: string): Promise<string[]> {
+  const out = await git(root, ['log', `${target}..HEAD`, '--pretty=format:%s']);
+  if (!out) return [];
+  return out
+    .split('\n')
+    .map((l) => l.trimEnd())
+    .filter((l) => l.length > 0);
+}
+
+/** Unified diff of HEAD against `target` (`git diff target..HEAD`).
+   Returns '' when empty or git fails. */
+export async function diffRange(root: string, target: string): Promise<string> {
+  const out = await git(root, ['diff', `${target}..HEAD`]);
+  return out ?? '';
+}
+
 /** Revert a file to HEAD (the /discard command). */
 export async function discardFile(root: string, relPath: string): Promise<boolean> {
   const restored = await git(root, ['restore', '--worktree', '--staged', '--', relPath]);
