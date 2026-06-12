@@ -8,13 +8,15 @@ import type { Keymap } from '../core/keymap.js';
 import type { ThemeOverride } from '../core/theme.js';
 import type { DiffLine, BlameLine } from '../core/gitParse.js';
 import type { FindResult } from '../services/ripgrep.js';
+import type { CommandResult, PassthruLabel } from '../services/passthru.js';
 import type { VimState } from '../core/vim/index.js';
 
 export type Focus = 'tree' | 'editor';
-export type MainView = 'empty' | 'editor' | 'find' | 'diff' | 'blame';
+export type MainView = 'empty' | 'editor' | 'find' | 'diff' | 'blame' | 'help' | 'command';
 
 export type InputMode =
   | { kind: 'find' }
+  | { kind: 'passthru'; label: PassthruLabel }
   | { kind: 'rename'; target: string }
   | { kind: 'confirm'; question: string; action: ConfirmAction };
 
@@ -57,6 +59,7 @@ export interface AppState {
   findSel: number;
   diff: DiffLine[] | null;
   blame: BlameLine[] | null;
+  command: CommandResult | null;
   outputScroll: number;
   outputTitle: string;
 

@@ -211,8 +211,11 @@ ever means one thing in one context. Switch or author a theme with `/theme`.
 | `Enter` / `/edit` | tree | open selected file |
 | *type text* | tree | fuzzy-filter |
 | `/diff` `/blame` | selection | git on the selected file |
+| `/git <args>` | anywhere | git passthrough — branches, commits, diffs, history → main panel |
+| `/gh <args>` | anywhere | GitHub CLI passthrough — PRs, issues, releases → main panel |
 | `/find <regex>` | anywhere | ripgrep project search |
 | `/theme` | anywhere | switch color theme |
+| `/help` | anywhere | keys & commands reference |
 | `:w` / `Ctrl-S` | editor | save |
 | `:q` / `:wq` | editor | back to the tree (Loom stays open) |
 | `Esc` | anywhere | step back a mode / clear filter |

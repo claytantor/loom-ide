@@ -10,6 +10,7 @@ import { DEFAULT_KEYMAP, type Keymap } from '../core/keymap.js';
 import type { ThemeOverride } from '../core/theme.js';
 import type { BlameLine, DiffLine } from '../core/gitParse.js';
 import type { FindResult } from '../services/ripgrep.js';
+import type { CommandResult } from '../services/passthru.js';
 import type { WatchBatch } from '../services/watcher.js';
 import type { VimState } from '../core/vim/index.js';
 import type { AppState, Diagnostic, InputMode, MainView } from './types.js';
@@ -36,7 +37,7 @@ export type Action =
   | { type: 'vim-set'; vim: VimState }
   | { type: 'buffer-stale'; stale: boolean }
   | { type: 'close-editor' }
-  | { type: 'view'; view: MainView; title?: string; diff?: DiffLine[] | null; blame?: BlameLine[] | null; find?: FindResult | null }
+  | { type: 'view'; view: MainView; title?: string; diff?: DiffLine[] | null; blame?: BlameLine[] | null; find?: FindResult | null; command?: CommandResult | null }
   | { type: 'find-sel'; sel: number }
   | { type: 'output-scroll'; scroll: number }
   | { type: 'toast'; text: string; danger?: boolean }
@@ -69,6 +70,7 @@ export function initialState(root: string, rootName: string): AppState {
     findSel: 0,
     diff: null,
     blame: null,
+    command: null,
     outputScroll: 0,
     outputTitle: '',
     isRepo: false,
@@ -250,7 +252,10 @@ export function reduce(state: AppState, action: Action): AppState {
         focus: 'tree',
       };
 
-    case 'view':
+    case 'view': {
+      const isOutput =
+        action.view === 'find' || action.view === 'diff' || action.view === 'blame' ||
+        action.view === 'help' || action.view === 'command';
       return {
         ...state,
         mainView: action.view,
@@ -259,9 +264,11 @@ export function reduce(state: AppState, action: Action): AppState {
         blame: action.blame !== undefined ? action.blame : state.blame,
         find: action.find !== undefined ? action.find : state.find,
         findSel: action.find !== undefined ? 0 : state.findSel,
-        outputScroll: action.view === 'diff' || action.view === 'blame' ? 0 : state.outputScroll,
-        focus: action.view === 'find' || action.view === 'diff' || action.view === 'blame' ? 'editor' : state.focus,
+        command: action.command !== undefined ? action.command : state.command,
+        outputScroll: action.view === 'find' ? state.outputScroll : 0,
+        focus: isOutput ? 'editor' : state.focus,
       };
+    }
 
     case 'find-sel':
       return { ...state, findSel: Math.max(0, action.sel) };

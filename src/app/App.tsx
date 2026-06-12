@@ -20,6 +20,7 @@ import { scanRepo, SCAN_CAP } from '../services/fsScan.js';
 import { watchRepo, type RepoWatcher, type WatchBatch } from '../services/watcher.js';
 import { blameFile, currentBranch, diffFile, discardFile, isRepo as gitIsRepo, repoStatus } from '../services/git.js';
 import { findInProject } from '../services/ripgrep.js';
+import { runByLabel, type PassthruLabel } from '../services/passthru.js';
 import { loadBuffer, renamePath, saveBuffer } from '../services/bufferIo.js';
 import { ensureSeeded, loadSettings, saveConfig } from '../services/configIo.js';
 import { LspManager, pathToUri, resolveLanguage, uriToPath, type LspClient } from '../services/lsp/index.js';
@@ -31,7 +32,7 @@ import { filterSlash, filterThemeEntries, themeEntries, type SlashItem, type The
 import { ChromeContext } from '../ui/context.js';
 import { TreePane } from '../ui/TreePane.js';
 import { Editor } from '../ui/Editor.js';
-import { BlameView, DiffView, EmptyMain, FindView, flattenFind } from '../ui/OutputViews.js';
+import { BlameView, CommandView, DiffView, EmptyMain, FindView, HelpView, HELP_ROWS, flattenFind } from '../ui/OutputViews.js';
 import { OmniBar } from '../ui/OmniBar.js';
 import { SlashPalette } from '../ui/SlashPalette.js';
 
@@ -288,6 +289,14 @@ export function App({ root }: AppProps): React.JSX.Element {
     dispatch({ type: 'view', view: 'find', title: `/find ${query}`, find: res });
   }, [root]);
 
+  const runPassthru = useCallback(async (label: PassthruLabel, argString: string): Promise<void> => {
+    dispatch({ type: 'spinner', label: `/${label}` });
+    const result = await runByLabel(label, root, argString, { cols: refs.current.mainChars });
+    dispatch({ type: 'spinner', label: null });
+    dispatch({ type: 'view', view: 'command', title: `${label} ${argString}`, command: result });
+    if (result.error) toast(result.error, true);
+  }, [root, toast]);
+
   const runDiff = useCallback(async (rel: string): Promise<void> => {
     dispatch({ type: 'spinner', label: '/diff' });
     const raw = await diffFile(root, rel);
@@ -462,10 +471,24 @@ export function App({ root }: AppProps): React.JSX.Element {
         if (item.arg) void runFind(item.arg);
         else dispatch({ type: 'input-mode', mode: { kind: 'find' } });
         return;
+      case '/git':
+        clear();
+        if (item.arg) void runPassthru('git', item.arg);
+        else dispatch({ type: 'input-mode', mode: { kind: 'passthru', label: 'git' } });
+        return;
+      case '/gh':
+        clear();
+        if (item.arg) void runPassthru('gh', item.arg);
+        else dispatch({ type: 'input-mode', mode: { kind: 'passthru', label: 'gh' } });
+        return;
       case '/theme':
         // Open the theme picker: keep slash mode with a trailing space.
         pushOmni('/theme ');
         dispatch({ type: 'slash-sel', sel: 0 });
+        return;
+      case '/help':
+        clear();
+        dispatch({ type: 'view', view: 'help', title: '/help' });
         return;
       case '/quit':
         clear();
@@ -479,7 +502,7 @@ export function App({ root }: AppProps): React.JSX.Element {
       default:
         clear();
     }
-  }, [requestOpen, runDiff, runBlame, runFind, toast, doQuit]);
+  }, [requestOpen, runDiff, runBlame, runFind, runPassthru, toast, doQuit]);
 
   const submitEx = useCallback((cmd: string): void => {
     const s = stateRef.current;
@@ -540,8 +563,8 @@ export function App({ root }: AppProps): React.JSX.Element {
     : clamp(Math.min(state.config.treeWidth, layout === 'mid' ? 30 : 40), 24, Math.max(24, dims.cols - 30));
   const mainChars = layout === 'stacked' ? dims.cols : dims.cols - treeChars - 1;
 
-  const refs = useRef({ rows, effSel, findHits, slashItems, themeItems, editorBody: contentRows - 3, omniMode });
-  refs.current = { rows, effSel, findHits, slashItems, themeItems, editorBody: contentRows - 3, omniMode };
+  const refs = useRef({ rows, effSel, findHits, slashItems, themeItems, editorBody: contentRows - 3, mainChars, omniMode });
+  refs.current = { rows, effSel, findHits, slashItems, themeItems, editorBody: contentRows - 3, mainChars, omniMode };
 
   /* ── vim key feed ──────────────────────────────────────────────────── */
   const feedVim = useCallback((tokens: string[]): void => {
@@ -601,6 +624,10 @@ export function App({ root }: AppProps): React.JSX.Element {
           dispatch({ type: 'input-mode', mode: null });
           clearOmni(false);
           if (value) void runFind(value);
+        } else if (im.kind === 'passthru') {
+          dispatch({ type: 'input-mode', mode: null });
+          clearOmni(false);
+          if (value) void runPassthru(im.label, value);
         } else {
           void submitRename(im.target, value);
         }
@@ -788,9 +815,12 @@ export function App({ root }: AppProps): React.JSX.Element {
       return;
     }
 
-    if (s.mainView === 'diff' || s.mainView === 'blame') {
+    if (s.mainView === 'diff' || s.mainView === 'blame' || s.mainView === 'help' || s.mainView === 'command') {
       const action = lookupAction(s.keymap, 'output', desc);
-      const total = s.mainView === 'diff' ? (s.diff?.length ?? 0) : (s.blame?.length ?? 0);
+      const total = s.mainView === 'diff' ? (s.diff?.length ?? 0)
+        : s.mainView === 'blame' ? (s.blame?.length ?? 0)
+        : s.mainView === 'command' ? (s.command?.lines.length ?? 0)
+        : HELP_ROWS.length;
       const page = Math.max(1, refs.current.editorBody);
       const maxScroll = Math.max(0, total - page);
       if (input.length > 0 && input[0] === '/' && !key.ctrl && !key.meta) {
@@ -908,6 +938,10 @@ export function App({ root }: AppProps): React.JSX.Element {
     mainPane = <DiffView title={state.outputTitle} lines={state.diff} scroll={state.outputScroll} width={mainChars} height={contentRows} />;
   } else if (state.mainView === 'blame' && state.blame) {
     mainPane = <BlameView title={state.outputTitle} lines={state.blame} scroll={state.outputScroll} width={mainChars} height={contentRows} />;
+  } else if (state.mainView === 'help') {
+    mainPane = <HelpView scroll={state.outputScroll} width={mainChars} height={contentRows} />;
+  } else if (state.mainView === 'command' && state.command) {
+    mainPane = <CommandView result={state.command} scroll={state.outputScroll} width={mainChars} height={contentRows} />;
   } else if (state.mainView === 'editor' && state.vim && state.openFile) {
     mainPane = (
       <Editor

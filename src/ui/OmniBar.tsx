@@ -89,6 +89,8 @@ function promptFor(input: InputMode | null): string | null {
   switch (input.kind) {
     case 'find':
       return 'find:';
+    case 'passthru':
+      return input.label;
     case 'rename':
       return `rename ${input.target} ${'→'}`;
     case 'confirm':
