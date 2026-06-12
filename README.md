@@ -228,6 +228,9 @@ marks, registers, search/substitute, undo/redo).
 
 - `:w` / `Ctrl-S` — save · `:q` / `:wq` — back to the tree (Loom keeps running)
 - `Ctrl-G` — toggle the line-number gutter
+- `:set wrap` / `:set nowrap` (or `:set wrap!`) — soft-wrap long lines vs.
+  truncate them; off by default (set `wrap: true` in `~/.loom/config.yml` to
+  default it on)
 - `K` — hover docs · `gd` — go to definition (when a language server is running)
 
 If something changes the file underneath you, Loom flags it in the status line

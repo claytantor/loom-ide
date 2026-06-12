@@ -2,11 +2,24 @@ import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import { mkdtemp, mkdir, rm, writeFile, chmod, readFile, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createRequire } from 'node:module';
 import {
   buildPrompt, commitLogDraft, createPr, extractPrUrl, findPrTemplate,
   generatePrDescription, parseDraft, preflightAuth,
   type PrContext, type QueryFn,
 } from '../src/services/pr.js';
+
+// The real-import fallback can only be exercised when the SDK is genuinely
+// absent; with it installed, `loadSdkQuery()` returns the real `query`, which
+// would spawn a live `claude` subprocess. Detect presence so that test can skip.
+const SDK_INSTALLED = (() => {
+  try {
+    createRequire(import.meta.url).resolve('@anthropic-ai/claude-agent-sdk');
+    return true;
+  } catch {
+    return false;
+  }
+})();
 
 /* ── pure parsing ─────────────────────────────────────────────────────────── */
 
@@ -197,7 +210,9 @@ describe('generatePrDescription', () => {
     expect(d.note).toMatch(/5000 lines/);
   });
 
-  test('without an injected query and no SDK installed, falls back without throwing', async () => {
+  // Only meaningful when the SDK is absent — with it installed, the real import
+  // succeeds and `query()` would spawn a live `claude` subprocess.
+  test.skipIf(SDK_INSTALLED)('without an injected query and no SDK installed, falls back without throwing', async () => {
     // No opts.query, package absent → loadSdkQuery() returns null → commit-log.
     const d = await generatePrDescription(ctx);
     expect(d.usedAi).toBe(false);

@@ -88,6 +88,13 @@ describe('mergeConfig', () => {
     expect(warnings.some((w) => w.includes('prDefaultTarget'))).toBe(true);
     expect(config.prDefaultTarget).toBe('');
   });
+  test('wrap defaults off, applies a boolean, warns on non-boolean', () => {
+    expect(DEFAULT_CONFIG.wrap).toBe(false);
+    expect(mergeConfig({ wrap: true }).config.wrap).toBe(true);
+    const { config, warnings } = mergeConfig({ wrap: 'yes' });
+    expect(warnings.some((w) => w.includes('wrap'))).toBe(true);
+    expect(config.wrap).toBe(false);
+  });
 });
 
 describe('resolveTheme', () => {

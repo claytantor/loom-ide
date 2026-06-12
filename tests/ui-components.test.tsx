@@ -5,9 +5,11 @@ import { TreePane } from '../src/ui/TreePane.js';
 import { OmniBar } from '../src/ui/OmniBar.js';
 import { SlashPalette } from '../src/ui/SlashPalette.js';
 import { CommandView, EmptyMain, HelpView, HELP_ROWS } from '../src/ui/OutputViews.js';
+import { Editor } from '../src/ui/Editor.js';
 import { buildTree, flattenVisible, setDirOpen, applyGitStatus, type GitCode } from '../src/core/tree.js';
 import { computeFilter } from '../src/core/filter.js';
 import { filterSlash } from '../src/state/commands.js';
+import { createVim } from '../src/core/vim/index.js';
 
 const PATHS = ['src/server/index.ts', 'src/server/app.ts', 'scripts/deploy.sh', 'package.json'];
 
@@ -182,6 +184,48 @@ describe('EmptyMain', () => {
     expect(frame).toContain('l o o m');
     expect(frame).toContain('type to filter');
     expect(frame).toContain('/help for keys');
+  });
+});
+
+describe('Editor wrap', () => {
+  // 58 cols; at width 40 the editor's content area is ~37, so this wraps.
+  const longLine = 'HEAD' + '.'.repeat(50) + 'TAIL';
+  const frameFor = (wrap: boolean): string =>
+    render(
+      <Editor
+        vim={createVim(longLine)}
+        path="notes.md"
+        focused
+        gutter
+        wrap={wrap}
+        branch="main"
+        stale={false}
+        diagnostics={[]}
+        width={40}
+        height={12}
+      />,
+    ).lastFrame()!;
+
+  test('nowrap truncates the long line — the tail is hidden', () => {
+    const frame = frameFor(false);
+    expect(frame).toContain('HEAD');
+    expect(frame).not.toContain('TAIL');
+  });
+
+  test('wrap renders the continuation on a second row — the tail is visible', () => {
+    const frame = frameFor(true);
+    expect(frame).toContain('HEAD');
+    expect(frame).toContain('TAIL');
+  });
+
+  test('a wrapped buffer still numbers later lines once (continuations are blank)', () => {
+    const vim = createVim(longLine + '\nsecond line');
+    const frame = render(
+      <Editor vim={vim} path="notes.md" focused gutter wrap branch="main" stale={false} diagnostics={[]} width={40} height={12} />,
+    ).lastFrame()!;
+    expect(frame).toContain('TAIL'); // line 1 wrapped
+    expect(frame).toContain('second line'); // line 2 present
+    expect(frame).toMatch(/\b2\b/); // line 2 keeps its number
   });
 });
 

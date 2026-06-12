@@ -9,6 +9,8 @@ export interface LoomConfig {
   glyphs: GlyphSet;
   fuzzyMode: FuzzyMode;
   gutter: boolean;
+  /** Editor: soft-wrap long lines (`:set wrap`); false truncates them (default). */
+  wrap: boolean;
   treeWidth: number;
   /** /pr: diffs larger than this (in lines) skip the AI and use a commit-log draft (R7). */
   prDiffLimit: number;
@@ -22,6 +24,7 @@ export const DEFAULT_CONFIG: LoomConfig = {
   glyphs: 'unicode',
   fuzzyMode: 'dim',
   gutter: true,
+  wrap: false,
   treeWidth: 32,
   prDiffLimit: 1000,
   prDefaultTarget: '',
@@ -67,6 +70,10 @@ export function mergeConfig(raw: unknown): ConfigLoadResult {
   if (o.gutter !== undefined) {
     if (typeof o.gutter === 'boolean') config.gutter = o.gutter;
     else warnings.push('config.yml: gutter must be true or false');
+  }
+  if (o.wrap !== undefined) {
+    if (typeof o.wrap === 'boolean') config.wrap = o.wrap;
+    else warnings.push('config.yml: wrap must be true or false');
   }
   if (o.treeWidth !== undefined) {
     if (typeof o.treeWidth === 'number' && Number.isFinite(o.treeWidth)) {

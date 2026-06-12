@@ -657,6 +657,22 @@ export function App({ root }: AppProps): React.JSX.Element {
       else void openFileAt(s.openFile);
       return;
     }
+    // `:set wrap` and friends — a display option, handled at the app layer (it
+    // lives in config, not the engine) like the `:e` reload above.
+    const setMatch = /^se(?:t)?\s+(.+)$/.exec(trimmed);
+    if (setMatch) {
+      const opt = setMatch[1]!.trim();
+      if (opt === 'wrap' || opt === 'nowrap' || opt === 'wrap!' || opt === 'invwrap') {
+        const next = opt === 'wrap' ? true : opt === 'nowrap' ? false : !s.config.wrap;
+        dispatch({ type: 'config', config: { ...s.config, wrap: next } });
+        toast(next ? 'wrap' : 'nowrap');
+      } else if (opt === 'wrap?') {
+        toast(s.config.wrap ? 'wrap' : 'nowrap');
+      } else {
+        toast(`unsupported option: ${opt} — only 'wrap' is supported`, true);
+      }
+      return;
+    }
     const { state: vim, effects } = runEx(s.vim, trimmed);
     dispatch({ type: 'vim-set', vim });
     handleVimEffects(effects, vim);
@@ -1095,6 +1111,7 @@ export function App({ root }: AppProps): React.JSX.Element {
         path={state.openFile}
         focused={state.focus === 'editor'}
         gutter={state.config.gutter}
+        wrap={state.config.wrap}
         branch={state.branch}
         stale={state.bufferStale}
         diagnostics={state.prCompose ? [] : (state.diagnostics.get(state.openFile) ?? [])}
