@@ -11,6 +11,35 @@ BIN_DIR="${LOOM_BIN_DIR:-$HOME/.local/bin}"
 say() { printf '\033[36m→\033[0m %s\n' "$*"; }
 die() { printf '\033[31mloom:\033[0m %s\n' "$*" >&2; exit 1; }
 
+# Make sure $BIN_DIR is on PATH. If not, add it to the user's shell rc (unless
+# LOOM_NO_MODIFY_PATH=1), and always print the manual line.
+ensure_on_path() {
+  case ":$PATH:" in *":$BIN_DIR:"*) return 0 ;; esac
+
+  local rc line
+  line="export PATH=\"$BIN_DIR:\$PATH\""
+  case "$(basename "${SHELL:-sh}")" in
+    zsh)  rc="${ZDOTDIR:-$HOME}/.zshrc" ;;
+    bash) rc="$HOME/.bashrc"; [ -f "$rc" ] || rc="$HOME/.bash_profile" ;;
+    fish) rc="$HOME/.config/fish/config.fish"; line="fish_add_path $BIN_DIR" ;;
+    *)    rc="" ;;
+  esac
+
+  if [ "${LOOM_NO_MODIFY_PATH:-0}" = "1" ] || [ -z "$rc" ]; then
+    printf '\033[33mnote:\033[0m %s is not on your PATH. Add it with:\n  %s\n' "$BIN_DIR" "$line"
+    return 0
+  fi
+
+  if [ -f "$rc" ] && grep -qF "$BIN_DIR" "$rc"; then
+    say "$BIN_DIR already on PATH via $rc"
+  else
+    mkdir -p "$(dirname "$rc")"
+    printf '\n# added by the loom installer\n%s\n' "$line" >> "$rc"
+    say "added $BIN_DIR to your PATH in $rc"
+  fi
+  printf '   open a new terminal or run:  \033[36msource %s\033[0m\n' "$rc"
+}
+
 command -v git >/dev/null 2>&1 || die "git is required"
 command -v node >/dev/null 2>&1 || die "node >= 18 is required"
 command -v npm >/dev/null 2>&1 || die "npm is required"
@@ -42,9 +71,7 @@ say "linking $BIN_DIR/loom"
 chmod +x "$DEST/dist/cli.js"
 ln -sf "$DEST/dist/cli.js" "$BIN_DIR/loom"
 
-case ":$PATH:" in
-  *":$BIN_DIR:"*) ;;
-  *) printf '\033[33mnote:\033[0m %s is not on your PATH — add: export PATH="%s:$PATH"\n' "$BIN_DIR" "$BIN_DIR" ;;
-esac
+ensure_on_path
 
-printf '\033[32m✓\033[0m loom installed — cd into a repo and run: loom\n'
+printf '\033[32m✓\033[0m loom installed — cd into a repo and run: \033[36mloom\033[0m\n'
+printf '  upgrade later with:  \033[36mloom --upgrade\033[0m\n'

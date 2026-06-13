@@ -4,10 +4,12 @@
 
 import React from 'react';
 import { render } from 'ink';
-import { resolve } from 'node:path';
-import { statSync } from 'node:fs';
+import { resolve, dirname } from 'node:path';
+import { statSync, realpathSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { App } from './app/App.js';
+import { runUpgrade } from './services/upgrade.js';
 
 const ALT_SCREEN_ON = '\x1b[?1049h\x1b[H';
 const ALT_SCREEN_OFF = '\x1b[?1049l';
@@ -19,14 +21,34 @@ function usage(): void {
       '',
       'usage: loom [directory]',
       '',
-      '  directory   repo to open (default: current directory)',
+      '  directory      repo to open (default: current directory)',
       '  -h, --help     show this help',
       '  -V, --version  print version',
+      '  --upgrade      update loom in place (git pull + reinstall + build)',
       '',
       'config lives in ~/.loom (config.yml, keybindings.yml, themes/)',
       '',
     ].join('\n'),
   );
+}
+
+/** The loom install root (the dir containing dist/ + package.json). Resolves the
+   symlink so an installed `loom` on $PATH finds its real ~/.loom/app clone. */
+function appRoot(): string {
+  const cli = realpathSync(fileURLToPath(import.meta.url)); // …/app/dist/cli.js
+  return resolve(dirname(cli), '..');
+}
+
+function upgrade(): void {
+  const dir = appRoot();
+  process.stdout.write(`upgrading loom in ${dir}\n`);
+  const res = runUpgrade(dir);
+  if (res.ok) {
+    process.stdout.write(`\x1b[32m✓\x1b[0m ${res.message} — loom ${version()}\n`);
+  } else {
+    process.stderr.write(`\x1b[31mloom:\x1b[0m ${res.message}\n`);
+    process.exit(1);
+  }
 }
 
 function version(): string {
@@ -47,6 +69,10 @@ function main(): void {
   }
   if (arg === '--version' || arg === '-V') {
     process.stdout.write(`loom ${version()}\n`);
+    return;
+  }
+  if (arg === '--upgrade' || arg === 'upgrade') {
+    upgrade();
     return;
   }
   const root = resolve(arg ?? process.cwd());
