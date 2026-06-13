@@ -161,14 +161,26 @@ tree-first, single-file, agent-adjacent model:
 curl -fsSL https://raw.githubusercontent.com/claytantor/loom-ide/main/install.sh | bash
 ```
 
-The installer clones Loom to `~/.loom/app`, installs dependencies, seeds your
-config and themes into `~/.loom`, and symlinks the `loom` executable onto your
-`$PATH`. Run it from any directory to open that repo:
+The installer clones Loom to `~/.loom/app`, installs dependencies, builds, seeds
+your config and themes into `~/.loom`, and symlinks the `loom` executable into
+`~/.local/bin`. If that directory isn't on your `PATH`, the installer adds it to
+your shell rc (`.zshrc` / `.bashrc` / fish `config.fish`) and tells you to open a
+new terminal or `source` it — set `LOOM_NO_MODIFY_PATH=1` to opt out and just get
+the line printed. Then run it from any repo:
 
 ```bash
 cd ~/my-project
 loom
 ```
+
+**Upgrade in place** at any time — `loom` pulls and rebuilds its own install:
+
+```bash
+loom --upgrade      # git pull + reinstall + rebuild in ~/.loom/app
+```
+
+Install locations are overridable: `LOOM_HOME` (default `~/.loom`) and
+`LOOM_BIN_DIR` (default `~/.local/bin`).
 
 ---
 
