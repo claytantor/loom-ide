@@ -178,12 +178,33 @@ describe('SlashPalette', () => {
 });
 
 describe('EmptyMain', () => {
-  test('welcome wordmark and hints', () => {
-    const { lastFrame } = render(<EmptyMain width={60} height={10} watching />);
+  test('renders the big loom art block and hints when the pane is roomy', () => {
+    const { lastFrame } = render(<EmptyMain width={60} height={12} watching />);
     const frame = lastFrame()!;
-    expect(frame).toContain('l o o m');
+    // The block "loom" wordmark — the bottom row is the most distinctive.
+    expect(frame).toContain('█▄ ▀██▀ ▀██▀ █   █');
     expect(frame).toContain('type to filter');
     expect(frame).toContain('/help for keys');
+  });
+
+  test('art rows all line up — identical leading indent on every row', () => {
+    const { lastFrame } = render(<EmptyMain width={60} height={12} watching />);
+    // Every art row begins with the left edge of the `l` glyph (a full block).
+    const artLines = lastFrame()!
+      .split('\n')
+      .filter((l) => l.replace(/^ +/, '').startsWith('█'));
+    expect(artLines.length).toBe(5); // all five rows, not a subset
+    // Centering must indent EVERY art row by the same number of columns; an
+    // unequal indent is exactly the "lines don't line up" bug. Because the block
+    // art carries no leading/trailing whitespace, nothing is trimmed and the
+    // whole block is centered as one element — so all indents must be equal.
+    const indents = new Set(artLines.map((l) => l.length - l.replace(/^ +/, '').length));
+    expect(indents.size).toBe(1);
+  });
+
+  test('falls back to the letter-spaced wordmark when the pane is narrow', () => {
+    const { lastFrame } = render(<EmptyMain width={20} height={12} watching />);
+    expect(lastFrame()!).toContain('l o o m');
   });
 });
 

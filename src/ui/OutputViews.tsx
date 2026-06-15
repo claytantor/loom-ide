@@ -7,6 +7,7 @@ import type { FindResult } from '../services/ripgrep.js';
 import type { CommandResult } from '../services/passthru.js';
 import type { BlameLine, DiffLine } from '../core/gitParse.js';
 import { endTruncate } from '../core/text.js';
+import { pickWordmark } from '../core/wordmark.js';
 import { SLASH_COMMANDS } from '../state/commands.js';
 import { useChrome } from './context.js';
 
@@ -333,12 +334,24 @@ export function CommandView({ result, scroll, width, height }: CommandViewProps)
 
 export function EmptyMain({ width, height, watching }: { width: number; height: number; watching: boolean }): React.JSX.Element {
   const { theme, g } = useChrome();
+  // Pick the largest wordmark that fits THIS pane (narrower than the terminal —
+  // the file tree shares the row). Every returned tier has equal-length lines
+  // with no leading/trailing whitespace, so a single centered multi-line <Text>
+  // stacks the rows in perfect register; centering can never overflow because
+  // the chosen width is guaranteed <= `width`.
+  //
+  // STATIC, deliberately: an earlier per-cell animated cloth was reverted. In
+  // Ink 5 the app fills the whole alternate-screen viewport, so every per-frame
+  // commit forces log-update to erase and repaint the full-height frame — a
+  // visible whole-screen flash ~11x/s. Ink 5 has no incrementalRendering escape
+  // hatch, so the art is rendered once and never re-commits.
+  const art = pickWordmark(width, height);
   return (
     <Box width={width} height={height} alignItems="center" justifyContent="center" flexDirection="column">
-      <Text color={theme.secondary} bold>l o o m</Text>
+      <Text color={theme.secondary} bold>{art.lines.join('\n')}</Text>
       <Box marginTop={1} flexDirection="column" alignItems="center">
-        <Text color={theme.dim}>type to filter · {g.enter} to open · / for commands · /help for keys</Text>
-        <Text color={theme.dim}>{watching ? `${g.branch} watching the working tree — live` : 'not a git repository'}</Text>
+        <Text color={theme.dim} wrap="truncate">type to filter · {g.enter} to open · / for commands · /help for keys</Text>
+        <Text color={theme.dim} wrap="truncate">{watching ? `${g.branch} watching the working tree — live` : 'not a git repository'}</Text>
       </Box>
     </Box>
   );
