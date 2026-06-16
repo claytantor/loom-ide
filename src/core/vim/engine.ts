@@ -66,6 +66,10 @@ export function handleKey(
 ): { state: VimState; effects: VimEffects } {
   const viewportRows = ctx?.viewportRows ?? DEFAULT_VIEWPORT_ROWS;
   let result = dispatch(clearMessage(state), key, viewportRows);
+  // A yank surfaced by this key — bridged to the system clipboard by the host.
+  // Yanks are never dot-recorded, so a replayed `.` cannot produce one; capture
+  // it from the first dispatch before any replay folding clears the field.
+  const yank = result.yank;
   if (result.replay) {
     // Dot repeat: re-feed the recorded tokens through the engine.
     let cur = result.state;
@@ -77,6 +81,7 @@ export function handleKey(
   }
   const effects: VimEffects = {};
   if (result.state.message !== null) effects.message = result.state.message;
+  if (yank) effects.yank = yank;
   return { state: result.state, effects };
 }
 

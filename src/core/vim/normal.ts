@@ -1,6 +1,6 @@
 // Normal-mode key parsing and execution.
 
-import type { Pos, UndoEntry, VimState } from './types.js';
+import type { Pos, UndoEntry, VimState, YankEffect } from './types.js';
 import { EOL_DESIRED } from './types.js';
 import {
   charClass,
@@ -36,6 +36,8 @@ export interface NormalResult {
   state: VimState;
   /** Tokens to re-feed through the engine (dot repeat). */
   replay?: string[];
+  /** Text just yanked — surfaced so the host can bridge it to the clipboard. */
+  yank?: YankEffect;
 }
 
 const KEY_ALIASES: Readonly<Record<string, string>> = {
@@ -337,7 +339,7 @@ function recordDot(state: VimState, tokens: readonly string[], count: number | n
   return { ...state, lastChange: { tokens, count } };
 }
 
-function execOperator(state: VimState, cmd: NormalCmd, viewportRows: number): VimState {
+function execOperator(state: VimState, cmd: NormalCmd, viewportRows: number): NormalResult {
   const action = cmd.action as Extract<Action, { t: 'op' }>;
   const count = cmd.count ?? 1;
   const snap = snapshotOf(state);
@@ -345,20 +347,20 @@ function execOperator(state: VimState, cmd: NormalCmd, viewportRows: number): Vi
 
   if (action.op === 'c') {
     if (emptyAt) {
-      return enterInsert(state, snap, cmd.dotTokens, cmd.count, state.lines, emptyAt);
+      return { state: enterInsert(state, snap, cmd.dotTokens, cmd.count, state.lines, emptyAt) };
     }
-    if (!range) return state;
+    if (!range) return { state };
     const { text, linewise } = rangeText(state.lines, range);
     const registers = writeRegister(state.registers, cmd.register, text, linewise, false);
     if (range.wise === 'line') {
       const chg = changeLinewise(state.lines, range.startRow, range.endRow);
-      return enterInsert({ ...state, registers }, snap, cmd.dotTokens, cmd.count, chg.lines, chg.cursor);
+      return { state: enterInsert({ ...state, registers }, snap, cmd.dotTokens, cmd.count, chg.lines, chg.cursor) };
     }
     const del = deleteRange(state.lines, range);
-    return enterInsert({ ...state, registers }, snap, cmd.dotTokens, cmd.count, del.lines, range.start);
+    return { state: enterInsert({ ...state, registers }, snap, cmd.dotTokens, cmd.count, del.lines, range.start) };
   }
 
-  if (!range) return state;
+  if (!range) return { state };
 
   if (action.op === 'y') {
     const { text, linewise } = rangeText(state.lines, range);
@@ -367,7 +369,10 @@ function execOperator(state: VimState, cmd: NormalCmd, viewportRows: number): Vi
       range.wise === 'line'
         ? { row: range.startRow, col: Math.min(state.cursor.col, maxNormalCol(lineAt(state.lines, range.startRow))) }
         : range.start;
-    return { ...state, registers, cursor: clampNormal(state.lines, cursor), desiredCol: null };
+    return {
+      state: { ...state, registers, cursor: clampNormal(state.lines, cursor), desiredCol: null },
+      yank: { text, linewise },
+    };
   }
 
   if (action.op === '>' || action.op === '<') {
@@ -375,14 +380,14 @@ function execOperator(state: VimState, cmd: NormalCmd, viewportRows: number): Vi
     const endRow = range.wise === 'line' ? range.endRow : range.endEx.row;
     const lines = indentLines(state.lines, startRow, endRow, action.op === '>' ? 1 : -1);
     const cursor = { row: startRow, col: firstNonBlankCol(lineAt(lines, startRow)) };
-    return recordDot(commitChange(state, snap, lines, cursor), cmd.dotTokens, cmd.count);
+    return { state: recordDot(commitChange(state, snap, lines, cursor), cmd.dotTokens, cmd.count) };
   }
 
   // delete
   const del = deleteRange(state.lines, range);
   const registers = writeRegister(state.registers, cmd.register, del.text, del.linewise, false);
   const next = commitChange({ ...state, registers }, snap, del.lines, del.cursor);
-  return recordDot({ ...next, desiredCol: null }, cmd.dotTokens, cmd.count);
+  return { state: recordDot({ ...next, desiredCol: null }, cmd.dotTokens, cmd.count) };
 }
 
 function doSearchJump(state: VimState, pattern: string, dir: 1 | -1, from: Pos): VimState {
@@ -458,7 +463,7 @@ function execSimple(state: VimState, cmd: NormalCmd, viewportRows: number): Norm
       const endRow = Math.min(cursor.row + count - 1, lastRow(lines));
       const { text } = rangeText(lines, { wise: 'line', startRow: cursor.row, endRow });
       const registers = writeRegister(state.registers, cmd.register, text, true, true);
-      return { state: { ...state, registers } };
+      return { state: { ...state, registers }, yank: { text, linewise: true } };
     }
     case 's': {
       const endEx = Math.min(cursor.col + count, line.length);
@@ -608,7 +613,7 @@ function execCmd(state: VimState, cmd: NormalCmd, viewportRows: number): NormalR
         state: applyMotionOutcome(state, cmd.action.motion, cmd.action.arg, cmd.count ?? 1, cmd.count !== null, viewportRows),
       };
     case 'op':
-      return { state: execOperator(state, cmd, viewportRows) };
+      return execOperator(state, cmd, viewportRows);
     case 'simple':
       return execSimple(state, cmd, viewportRows);
   }

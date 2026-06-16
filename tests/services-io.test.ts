@@ -5,7 +5,8 @@ import { join } from 'node:path';
 import { scanRepo, buildIgnorePredicate } from '../src/services/fsScan.js';
 import { fallbackSearch, findInProject } from '../src/services/ripgrep.js';
 import { ensureSeeded, loadSettings, saveConfig } from '../src/services/configIo.js';
-import { loadBuffer, saveBuffer } from '../src/services/bufferIo.js';
+import { createFile, loadBuffer, saveBuffer } from '../src/services/bufferIo.js';
+import { stat } from 'node:fs/promises';
 
 let dir: string;
 
@@ -149,5 +150,56 @@ describe('bufferIo', () => {
   test('binary file refuses to open', async () => {
     await writeFile(join(dir, 'bin.dat'), Buffer.from([0, 1, 2]));
     await expect(loadBuffer(dir, 'bin.dat')).rejects.toThrow(/binary/);
+  });
+});
+
+describe('createFile', () => {
+  test('creates an empty file at the current level', async () => {
+    const res = await createFile(dir, '', 'foo.ts');
+    expect(res).toEqual({ ok: true, relPath: 'foo.ts' });
+    expect(await readFile(join(dir, 'foo.ts'), 'utf8')).toBe('');
+  });
+
+  test('mkdir -p semantics for nested paths', async () => {
+    const res = await createFile(dir, 'src', 'components/Button.tsx');
+    expect(res).toEqual({ ok: true, relPath: 'src/components/Button.tsx' });
+    expect(await readFile(join(dir, 'src/components/Button.tsx'), 'utf8')).toBe('');
+    expect((await stat(join(dir, 'src/components'))).isDirectory()).toBe(true);
+  });
+
+  test('current level resolves under a selected dir', async () => {
+    await mkdir(join(dir, 'src/ui'), { recursive: true });
+    const res = await createFile(dir, 'src/ui', 'Panel.tsx');
+    expect(res).toEqual({ ok: true, relPath: 'src/ui/Panel.tsx' });
+    expect(await readFile(join(dir, 'src/ui/Panel.tsx'), 'utf8')).toBe('');
+  });
+
+  test('refuses to overwrite an existing file', async () => {
+    await writeFile(join(dir, 'keep.ts'), 'precious');
+    const res = await createFile(dir, '', 'keep.ts');
+    expect(res).toEqual({ ok: false, reason: 'exists', relPath: 'keep.ts' });
+    // Original content untouched.
+    expect(await readFile(join(dir, 'keep.ts'), 'utf8')).toBe('precious');
+  });
+
+  test('rejects path traversal that escapes the repo', async () => {
+    const res = await createFile(dir, 'src', '../../evil.ts');
+    expect(res).toEqual({ ok: false, reason: 'traversal' });
+  });
+
+  test('rejects absolute paths', async () => {
+    const res = await createFile(dir, 'src', '/etc/passwd');
+    expect(res).toEqual({ ok: false, reason: 'absolute' });
+  });
+
+  test('empty arg is a soft no-op', async () => {
+    expect(await createFile(dir, 'src', '   ')).toEqual({ ok: false, reason: 'empty' });
+  });
+
+  test('surfaces a friendly error when the parent path is a file', async () => {
+    await writeFile(join(dir, 'blocked'), 'i am a file');
+    const res = await createFile(dir, 'blocked', 'child.ts');
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toBe('error');
   });
 });

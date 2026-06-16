@@ -13,6 +13,7 @@ export interface SlashCommand {
 
 export const SLASH_COMMANDS: SlashCommand[] = [
   { name: '/edit', selScoped: true, desc: 'open {sel} in the editor' },
+  { name: '/add', selScoped: true, desc: 'create a new file at the current tree level and open it', takesArg: true },
   { name: '/diff', selScoped: true, desc: 'git diff of {sel}' },
   { name: '/discard', selScoped: true, desc: 'revert {sel} to HEAD', danger: true },
   { name: '/blame', selScoped: true, desc: 'git blame {sel}' },
@@ -21,6 +22,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: '/find', selScoped: false, desc: 'ripgrep project search', takesArg: true },
   { name: '/git', selScoped: false, desc: 'git — branches, commits, diffs, history', takesArg: true },
   { name: '/gh', selScoped: false, desc: 'github cli — prs, issues, releases, runs', takesArg: true },
+  { name: '/bash', selScoped: false, desc: 'run a shell command (bash -c) and show output', takesArg: true },
   { name: '/pr', selScoped: false, desc: 'open a github pull request (AI description)', takesArg: true },
   { name: '/theme', selScoped: false, desc: 'switch color theme', takesArg: true },
   { name: '/help', selScoped: false, desc: 'keys & commands' },

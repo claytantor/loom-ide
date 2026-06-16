@@ -28,6 +28,7 @@ export interface Glyphs {
   dirClosed: string;
   cursor: string;
   branch: string;
+  host: string;
   clean: string;
   dirty: string;
   prompt: string;
@@ -121,6 +122,7 @@ export const GLYPHS: Record<GlyphSet, Glyphs> = {
     dirClosed: '▸',
     cursor: '❱',
     branch: '⎇',
+    host: '⌂',
     clean: '✓',
     dirty: '±',
     prompt: '›',
@@ -142,6 +144,7 @@ export const GLYPHS: Record<GlyphSet, Glyphs> = {
     dirClosed: '>',
     cursor: '>',
     branch: 'git:',
+    host: 'host:',
     clean: 'ok',
     dirty: '*',
     prompt: '>',

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import { mkdtemp, rm, writeFile, chmod } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { GH_SPEC, GIT_SPEC, parseArgv, runByLabel, runGh, runGhArgv, runGit, runPassthrough, runPassthroughArgv, stripAnsi } from '../src/services/passthru.js';
+import { GH_SPEC, GIT_SPEC, parseArgv, runBash, runByLabel, runGh, runGhArgv, runGit, runPassthrough, runPassthroughArgv, stripAnsi } from '../src/services/passthru.js';
 
 describe('parseArgv', () => {
   test('splits on whitespace', () => {
@@ -161,5 +161,110 @@ describe('runPassthroughArgv', () => {
     const r = await runGhArgv(dir, ['auth', 'status'], { bin });
     expect(r.label).toBe('gh');
     expect(r.argv).toEqual(['auth', 'status']);
+  });
+});
+
+describe('runBash', () => {
+  let dir: string;
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'loom-bash-'));
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  test('labels the result bash and echoes the raw command as the single arg', async () => {
+    const r = await runBash(dir, 'echo hello');
+    expect(r.label).toBe('bash');
+    expect(r.ok).toBe(true);
+    expect(r.code).toBe(0);
+    expect(r.argv).toEqual(['echo hello']);
+    expect(r.lines).toEqual(['hello']);
+  });
+
+  test('interprets a PIPE through the shell (not argv-tokenized)', async () => {
+    const r = await runBash(dir, 'echo hi | tr a-z A-Z');
+    expect(r.ok).toBe(true);
+    expect(r.lines).toEqual(['HI']);
+  });
+
+  test('interprets && chaining', async () => {
+    const r = await runBash(dir, 'echo one && echo two');
+    expect(r.ok).toBe(true);
+    expect(r.lines).toEqual(['one', 'two']);
+  });
+
+  test('interprets || on failure of the left side', async () => {
+    const r = await runBash(dir, 'false || echo fallback');
+    expect(r.ok).toBe(true);
+    expect(r.lines).toEqual(['fallback']);
+  });
+
+  test('expands a glob against the cwd (= repo root)', async () => {
+    await writeFile(join(dir, 'alpha.txt'), '');
+    await writeFile(join(dir, 'beta.txt'), '');
+    const r = await runBash(dir, 'echo *.txt');
+    expect(r.ok).toBe(true);
+    expect(r.lines).toEqual(['alpha.txt beta.txt']);
+  });
+
+  test('honors a redirect, then reads the file back', async () => {
+    const r = await runBash(dir, 'echo persisted > out.txt && cat out.txt');
+    expect(r.ok).toBe(true);
+    expect(r.lines).toEqual(['persisted']);
+  });
+
+  test('expands $VAR (raw string reaches the shell, not pre-tokenized)', async () => {
+    const r = await runBash(dir, 'X=world; echo "hi $X"');
+    expect(r.ok).toBe(true);
+    expect(r.lines).toEqual(['hi world']);
+  });
+
+  test('passes single-quoted content through verbatim — shell, not parseArgv', async () => {
+    // parseArgv would strip the quotes; the shell keeps the literal spacing.
+    const r = await runBash(dir, "printf '%s\\n' 'a    b'");
+    expect(r.ok).toBe(true);
+    expect(r.lines).toEqual(['a    b']);
+  });
+
+  test('captures stderr', async () => {
+    const r = await runBash(dir, 'echo oops >&2');
+    expect(r.ok).toBe(true);
+    // success with empty stdout falls back to stderr in the capture core.
+    expect(r.lines).toEqual(['oops']);
+  });
+
+  test('surfaces a non-zero exit code with output', async () => {
+    const r = await runBash(dir, 'echo before; exit 3');
+    expect(r.ok).toBe(false);
+    expect(r.code).toBe(3);
+    expect(r.lines).toEqual(['before']);
+    expect(r.error).toBe('bash exited 3');
+  });
+
+  test('empty command returns usage without spawning', async () => {
+    const r = await runBash(dir, '   ', { bin: 'definitely-not-bash' });
+    expect(r.ok).toBe(true);
+    expect(r.argv).toEqual([]);
+    expect(r.lines[0]).toContain('usage: /bash');
+  });
+
+  test('missing bash binary yields a friendly hint, not a crash', async () => {
+    const r = await runBash(dir, 'echo hi', { bin: join(dir, 'nope-bash-xyz') });
+    expect(r.ok).toBe(false);
+    expect(r.error).toBe('bash not found');
+    expect(r.lines.join('\n')).toContain('bash not found on PATH');
+  });
+
+  test('timeout kills a hanging shell tree', async () => {
+    const r = await runBash(dir, 'sleep 5', { timeoutMs: 300 });
+    expect(r.ok).toBe(false);
+    expect(r.code).toBe(124);
+    expect(r.error).toContain('timed out');
+  });
+
+  test('strips ANSI from shell output', async () => {
+    const r = await runBash(dir, 'printf "\\033[32mGREEN\\033[0m\\n"');
+    expect(r.lines).toEqual(['GREEN']);
   });
 });

@@ -17,7 +17,9 @@ export type MainView = 'empty' | 'editor' | 'find' | 'diff' | 'blame' | 'help' |
 export type InputMode =
   | { kind: 'find' }
   | { kind: 'passthru'; label: PassthruLabel }
+  | { kind: 'bash' }
   | { kind: 'pr' }
+  | { kind: 'add' }
   | { kind: 'rename'; target: string }
   | { kind: 'confirm'; question: string; action: ConfirmAction };
 

@@ -106,6 +106,7 @@ describe('OmniBar', () => {
         mode="idle"
         inputMode={null}
         branch="main"
+        host="testbox"
         isRepo
         vimDirty={false}
         onDisk={2}
@@ -122,6 +123,46 @@ describe('OmniBar', () => {
     expect(frame).toContain('⎇ main ✓');
   });
 
+  test('wide layout shows the hostname grouped with the branch', () => {
+    const { lastFrame } = render(
+      <OmniBar
+        value=""
+        mode="idle"
+        inputMode={null}
+        branch="main"
+        host="testbox"
+        isRepo
+        vimDirty={false}
+        onDisk={2}
+        pulse={false}
+        layout="wide"
+        spinner={null}
+        width={120}
+      />,
+    );
+    expect(lastFrame()!).toContain('⌂ testbox');
+  });
+
+  test('narrow (mid) layout drops the hostname so it never overflows', () => {
+    const { lastFrame } = render(
+      <OmniBar
+        value=""
+        mode="idle"
+        inputMode={null}
+        branch="main"
+        host="testbox"
+        isRepo
+        vimDirty={false}
+        onDisk={2}
+        pulse={false}
+        layout="mid"
+        spinner={null}
+        width={70}
+      />,
+    );
+    expect(lastFrame()!).not.toContain('testbox');
+  });
+
   test('mid layout abbreviates; filter mode labeled', () => {
     const { lastFrame } = render(
       <OmniBar
@@ -129,6 +170,7 @@ describe('OmniBar', () => {
         mode="filter"
         inputMode={null}
         branch="main"
+        host="testbox"
         isRepo
         vimDirty
         onDisk={3}
@@ -151,6 +193,7 @@ describe('OmniBar', () => {
         mode="input"
         inputMode={{ kind: 'confirm', question: 'discard changes to a.ts?', action: { kind: 'quit' } }}
         branch="main"
+        host="testbox"
         isRepo
         vimDirty={false}
         onDisk={0}

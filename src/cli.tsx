@@ -13,6 +13,12 @@ import { runUpgrade } from './services/upgrade.js';
 
 const ALT_SCREEN_ON = '\x1b[?1049h\x1b[H';
 const ALT_SCREEN_OFF = '\x1b[?1049l';
+// Bracketed paste: pasted text arrives wrapped in \x1b[200~ … \x1b[201~ as one
+// block instead of a key storm that would trip vim commands / autoindent. Same
+// enable-on-start / disable-on-teardown lifecycle as the alt-screen buffer so
+// it's always cleaned up on exit.
+const BRACKETED_PASTE_ON = '\x1b[?2004h';
+const BRACKETED_PASTE_OFF = '\x1b[?2004l';
 
 function usage(): void {
   process.stdout.write(
@@ -91,10 +97,12 @@ function main(): void {
   }
 
   process.stdout.write(ALT_SCREEN_ON);
+  process.stdout.write(BRACKETED_PASTE_ON);
   let restored = false;
   const restore = (): void => {
     if (restored) return;
     restored = true;
+    process.stdout.write(BRACKETED_PASTE_OFF);
     process.stdout.write(ALT_SCREEN_OFF);
   };
   process.on('exit', restore);

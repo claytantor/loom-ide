@@ -82,6 +82,15 @@ export interface VimEffects {
   quit?: boolean;
   forced?: boolean;
   message?: string | null;
+  /** Text just yanked (y / Y / visual y). The app pushes it to the system
+   *  clipboard via OSC 52 — the engine stays pure and never touches stdout. */
+  yank?: YankEffect;
+}
+
+/** A yank surfaced to the host so it can bridge to the system clipboard. */
+export interface YankEffect {
+  readonly text: string;
+  readonly linewise: boolean;
 }
 
 export interface KeyContext {

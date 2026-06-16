@@ -20,11 +20,15 @@ import { scanRepo, SCAN_CAP } from '../services/fsScan.js';
 import { watchRepo, type RepoWatcher, type WatchBatch } from '../services/watcher.js';
 import { blameFile, currentBranch, diffFile, discardFile, isRepo as gitIsRepo, repoStatus } from '../services/git.js';
 import { findInProject } from '../services/ripgrep.js';
-import { parseArgv, runByLabel, runGit, type CommandResult, type PassthruLabel } from '../services/passthru.js';
+import { parseArgv, runBash, runByLabel, runGit, type CommandResult, type PassthruLabel } from '../services/passthru.js';
 import {
   commitLogDraft, createPr, gatherPrContext, generatePrDescription, parseDraft, preflightAuth,
 } from '../services/pr.js';
-import { loadBuffer, renamePath, saveBuffer } from '../services/bufferIo.js';
+import { createFile, loadBuffer, renamePath, saveBuffer } from '../services/bufferIo.js';
+import { copyToClipboard } from '../services/clipboard.js';
+import { extractPaste, hasPasteMarker } from '../core/paste.js';
+import { currentLevelDir, type SelKind } from '../core/addPath.js';
+import { shortHostname } from '../services/host.js';
 import { ensureSeeded, loadSettings, saveConfig } from '../services/configIo.js';
 import { LspManager, pathToUri, resolveLanguage, uriToPath, type LspClient } from '../services/lsp/index.js';
 
@@ -111,6 +115,8 @@ export function App({ root }: AppProps): React.JSX.Element {
     [stdout],
   );
   const [dims, setDims] = useState(measure);
+  // Hostname is constant for the session — resolve it once, never per frame.
+  const [host] = useState(shortHostname);
   useEffect(() => {
     if (!stdout || typeof stdout.on !== 'function') return;
     const onResize = (): void => setDims(measure());
@@ -300,6 +306,15 @@ export function App({ root }: AppProps): React.JSX.Element {
 
   const handleVimEffects = useCallback((effects: VimEffects, vim: VimState): void => {
     if (effects.message) toast(effects.message);
+    if (effects.yank) {
+      // Bridge the yank to the system clipboard via OSC 52 (SSH-safe). Pure
+      // engine surfaced the text; the stdout write is the side effect we own.
+      const copied = copyToClipboard(effects.yank.text, stdout);
+      if (copied) {
+        const lines = effects.yank.text.split('\n').length;
+        toast(`yanked ${lines} ${lines === 1 ? 'line' : 'lines'} to clipboard`);
+      }
+    }
     if (effects.save) void saveNow(vim);
     if (effects.quit) {
       // In a /pr compose buffer, quit means "abandon the PR", not "close a file".
@@ -309,7 +324,7 @@ export function App({ root }: AppProps): React.JSX.Element {
       if (stateRef.current.prCompose) cancelPr();
       else closeEditor();
     }
-  }, [toast, saveNow, closeEditor]);
+  }, [toast, saveNow, closeEditor, stdout]);
 
   /* LSP didChange sync, debounced on buffer text change. */
   useEffect(() => {
@@ -337,6 +352,21 @@ export function App({ root }: AppProps): React.JSX.Element {
     const result = await runByLabel(label, root, argString, { cols: refs.current.mainChars });
     dispatch({ type: 'spinner', label: null });
     dispatch({ type: 'view', view: 'command', title: `${label} ${argString}`, command: result });
+    if (result.error) toast(result.error, true);
+  }, [root, toast]);
+
+  /* /bash — shell passthrough. Unlike runPassthru (argv-based /gh /git) this
+     runs `bash -c <raw string>` so pipes, redirects, globs and chaining work. */
+  const runBashCmd = useCallback(async (commandString: string): Promise<void> => {
+    const cmd = commandString.trim();
+    if (!cmd) {
+      toast('usage: /bash <command>');
+      return;
+    }
+    dispatch({ type: 'spinner', label: '/bash' });
+    const result = await runBash(root, cmd, { cols: refs.current.mainChars });
+    dispatch({ type: 'spinner', label: null });
+    dispatch({ type: 'view', view: 'command', title: `bash ${cmd}`, command: result });
     if (result.error) toast(result.error, true);
   }, [root, toast]);
 
@@ -521,6 +551,52 @@ export function App({ root }: AppProps): React.JSX.Element {
     }
   }, [root, toast, refreshGit]);
 
+  /* /add — create a new empty file at the "current level" (the directory of the
+     current tree selection: a selected dir, a selected file's parent, or the
+     repo root when nothing is selected) and open it for editing. */
+  const runAdd = useCallback(async (rawArg: string): Promise<void> => {
+    const s = stateRef.current;
+    const node = s.selPath ? findNode(s.tree, s.selPath) : null;
+    const kind: SelKind = node ? (node.type === 'dir' ? 'dir' : 'file') : 'none';
+    const currentDir = currentLevelDir(s.selPath, kind);
+
+    const result = await createFile(root, currentDir, rawArg);
+    if (result.ok) {
+      // The watcher will also catch the new file, but add it eagerly so the
+      // open/reveal lands instantly (mirrors submitRename's optimistic batch).
+      dispatch({
+        type: 'tree-batch',
+        batch: { added: [result.relPath], addedDirs: [], changed: [], removed: [] },
+        now: Date.now(),
+      });
+      dispatch({ type: 'reveal', path: result.relPath });
+      void openFileAt(result.relPath); // open-on-create: focus the editor, ready to type
+      toast(`created ${result.relPath}`);
+      refreshGit();
+      return;
+    }
+    switch (result.reason) {
+      case 'empty':
+        toast('usage: /add <filename> — give a name (nested paths ok)');
+        return;
+      case 'absolute':
+        toast('/add takes a path relative to the current level, not an absolute one', true);
+        return;
+      case 'traversal':
+        toast('refusing to create a file outside the repo', true);
+        return;
+      case 'exists':
+        // Never clobber: surface it and just open the existing file instead.
+        toast(`${result.relPath} already exists — opening it`, true);
+        dispatch({ type: 'reveal', path: result.relPath });
+        requestOpen(result.relPath);
+        return;
+      case 'error':
+        toast(result.message, true);
+        return;
+    }
+  }, [root, toast, refreshGit, openFileAt, requestOpen]);
+
   const lspHover = useCallback(async (): Promise<void> => {
     const s = stateRef.current;
     if (!s.openFile || !s.vim) return;
@@ -565,6 +641,11 @@ export function App({ root }: AppProps): React.JSX.Element {
         clear();
         if (sel) requestOpen(sel);
         else toast('select a file first');
+        return;
+      case '/add':
+        clear();
+        if (item.arg) void runAdd(item.arg);
+        else dispatch({ type: 'input-mode', mode: { kind: 'add' } });
         return;
       case '/diff':
         clear();
@@ -613,6 +694,11 @@ export function App({ root }: AppProps): React.JSX.Element {
         if (item.arg) void runPassthru('gh', item.arg);
         else dispatch({ type: 'input-mode', mode: { kind: 'passthru', label: 'gh' } });
         return;
+      case '/bash':
+        clear();
+        if (item.arg) void runBashCmd(item.arg);
+        else dispatch({ type: 'input-mode', mode: { kind: 'bash' } });
+        return;
       case '/pr': {
         clear();
         const args = parsePrArgs(item.arg);
@@ -642,7 +728,7 @@ export function App({ root }: AppProps): React.JSX.Element {
       default:
         clear();
     }
-  }, [requestOpen, runDiff, runBlame, runFind, runPassthru, runPr, toast, doQuit]);
+  }, [requestOpen, runDiff, runBlame, runFind, runPassthru, runBashCmd, runPr, runAdd, toast, doQuit]);
 
   const submitEx = useCallback((cmd: string): void => {
     const s = stateRef.current;
@@ -737,6 +823,21 @@ export function App({ root }: AppProps): React.JSX.Element {
     handleVimEffects(agg, vim);
   }, [handleVimEffects]);
 
+  /* Insert a bracketed-paste block into the editor as one atomic chunk. Markers
+     are already stripped by the caller; we split the literal payload into engine
+     tokens (newlines → <CR>) so it lands verbatim with no per-char vim handling
+     or autoindent. Only meaningful in insert/replace mode — a paste in normal
+     mode is swallowed rather than re-interpreted as motions. */
+  const pasteIntoEditor = useCallback((text: string): void => {
+    const s = stateRef.current;
+    if (!s.vim) return;
+    if (s.vim.mode !== 'insert' && s.vim.mode !== 'replace') return;
+    if (text === '') return;
+    const tokens: string[] = [];
+    for (const ch of text) tokens.push(ch === '\n' ? '<CR>' : ch);
+    feedVim(tokens);
+  }, [feedVim]);
+
   const inkToTokens = useCallback((input: string, key: Parameters<Parameters<typeof useInput>[0]>[1]): string[] => {
     if (key.escape) return ['<Esc>'];
     if (key.return) return ['<CR>'];
@@ -756,6 +857,18 @@ export function App({ root }: AppProps): React.JSX.Element {
     const s = stateRef.current;
     const omni = omniRef.current;
     if (s.quitting) return;
+
+    /* 0 — bracketed paste. With ?2004h on, a paste arrives as one event wrapped
+       in \x1b[200~ … \x1b[201~. Strip the markers (so they can NEVER reach the
+       buffer in any mode) and, only in an editor insert, drop the literal block
+       in atomically. Anywhere else the paste is swallowed rather than replayed
+       as commands. Handled before all other routing. */
+    if (hasPasteMarker(input)) {
+      const content = extractPaste(input);
+      if (s.focus === 'editor' && s.mainView === 'editor') pasteIntoEditor(content);
+      return;
+    }
+
     const desc = keyDescFromInk(input, key);
     const mode = deriveOmniMode(omni, s.inputMode);
     const printable = input.length > 0 && !key.ctrl && !key.meta && !key.escape && !key.return && !key.tab
@@ -784,12 +897,21 @@ export function App({ root }: AppProps): React.JSX.Element {
           dispatch({ type: 'input-mode', mode: null });
           clearOmni(false);
           if (value) void runPassthru(im.label, value);
+        } else if (im.kind === 'bash') {
+          dispatch({ type: 'input-mode', mode: null });
+          clearOmni(false);
+          if (value) void runBashCmd(value);
         } else if (im.kind === 'pr') {
           dispatch({ type: 'input-mode', mode: null });
           clearOmni(false);
           const args = parsePrArgs(value);
           if (args.target) void runPr(args.target, args.draft, args.noAi);
           else toast('usage: /pr <base-branch> [--draft] [--no-ai]', true);
+        } else if (im.kind === 'add') {
+          dispatch({ type: 'input-mode', mode: null });
+          clearOmni(false);
+          if (value) void runAdd(value);
+          else toast('usage: /add <filename> — give a name (nested paths ok)');
         } else {
           void submitRename(im.target, value);
         }
@@ -1177,6 +1299,7 @@ export function App({ root }: AppProps): React.JSX.Element {
           mode={omniMode}
           inputMode={state.inputMode}
           branch={state.branch}
+          host={host}
           isRepo={state.isRepo}
           vimDirty={state.vim?.dirty ?? false}
           onDisk={state.gitDirty}

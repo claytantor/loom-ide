@@ -10,6 +10,7 @@ export interface OmniBarProps {
   mode: OmniMode;
   inputMode: InputMode | null;
   branch: string | null;
+  host: string;
   isRepo: boolean;
   vimDirty: boolean;
   onDisk: number;
@@ -46,12 +47,25 @@ export function OmniBar(props: OmniBarProps): React.JSX.Element {
     : theme.dim;
 
   const dirtyGlyph = props.vimDirty ? g.dirty : g.clean;
+  // Host is a low-priority, session-constant indicator: shown only in the wide
+  // layout (where the readout has room) and dropped in mid/stacked so it never
+  // pushes the branch/dirty state off-screen on narrow terminals. The enclosing
+  // <Text wrap="truncate"> guards the remaining overflow case.
+  const hostTag =
+    props.layout === 'wide' && props.host ? (
+      <Text color={theme.dim}>
+        {' · '}{g.host} {props.host}
+      </Text>
+    ) : null;
   const status = !props.isRepo ? (
-    <Text color={theme.dim}>no git</Text>
+    <Text color={theme.dim}>
+      no git{hostTag}
+    </Text>
   ) : props.layout === 'wide' ? (
     <Text color={theme.dim}>
       <Text color={props.pulse ? theme.accent : theme.dim}>{props.onDisk} changed on disk</Text>
       {' · '}{g.branch} {props.branch ?? '?'} {dirtyGlyph}
+      {hostTag}
     </Text>
   ) : (
     <Text color={theme.dim}>
@@ -91,8 +105,12 @@ function promptFor(input: InputMode | null): string | null {
       return 'find:';
     case 'passthru':
       return input.label;
+    case 'bash':
+      return 'bash →';
     case 'pr':
       return 'pr →';
+    case 'add':
+      return 'add →';
     case 'rename':
       return `rename ${input.target} ${'→'}`;
     case 'confirm':

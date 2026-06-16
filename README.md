@@ -36,7 +36,10 @@ on top.
   command, `:` to run vim ex commands.
 - **Copy-paste actually works.** No mouse capture, no border characters inside
   the work area — shift-drag in Gnome Terminal / iTerm2 / kitty / Alacritty /
-  WezTerm lands clean text in your clipboard.
+  WezTerm lands clean text in your clipboard. Or stay on the keyboard: a vim
+  yank (`y`) copies straight to your system clipboard over OSC 52 — pane-scoped
+  and SSH-safe, no X11 forwarding — and pastes arrive atomically via bracketed
+  paste.
 - **Zero ceremony to install.** A single `curl | bash` clones, installs, seeds
   your config and themes, and symlinks `loom` onto your `$PATH`.
 
@@ -265,7 +268,7 @@ Press `/` any time for the palette; **`/help`** shows the full cheat sheet
 
 **On the selected file:** `/edit` (open), `/diff` (git diff), `/blame`,
 `/rename`, `/reveal`, `/discard` (revert to HEAD).
-**Anywhere:** `/find <regex>` (ripgrep search), `/theme`, `/help`, `/quit`.
+**Anywhere:** `/find <regex>` (ripgrep search), `/bash <command>` (shell passthrough), `/theme`, `/help`, `/quit`.
 
 ### Git & GitHub passthroughs
 
@@ -276,9 +279,17 @@ Loom keeps `git` and `gh` one keystroke away — output lands in the main panel
   `/git log --oneline`, `/git branch`, `/git diff` …
 - **`/gh <args>`** — GitHub features: `/gh pr list`, `/gh issue view 42`,
   `/gh run list`, `/gh api user` …
+- **`/bash <command>`** — run an arbitrary shell command via `bash -c` and show
+  its output in the main panel: `/bash npm test`, `/bash echo hi | tr a-z A-Z`,
+  `/bash ls *.ts && wc -l src/**/*.ts` … Unlike `/git` and `/gh` (which run a
+  fixed binary with tokenized args), `/bash` hands the **whole raw string to the
+  shell**, so pipes (`|`), redirects (`>`, `>>`, `<`), globs (`*`), chaining
+  (`&&`, `||`, `;`), subshells, and `$VAR` expansion all work. It runs in the
+  project root with your environment.
 
-Both run *your* `git`/`gh` with *your* auth — anything those CLIs do, you can do
-from Loom. Type `/git` or `/gh` with no args to get a prompt.
+`/git`/`/gh` run *your* `git`/`gh` with *your* auth; `/bash` runs *your* shell —
+anything those do, you can do from Loom. Type `/git`, `/gh`, or `/bash` with no
+args to get a prompt.
 
 ### AI-assisted pull requests — `/pr`
 
@@ -341,6 +352,18 @@ prDefaultTarget: ''
   press **`Ctrl-B`** to hide the tree (full-width editor) so the drag lands only
   on editor text, and **`Ctrl-G`** to drop the line-number gutter for code with
   nothing extra. `Ctrl-B` again (or `Tab`) brings the tree back.
+- **Keyboard copy without dragging:** a vim yank (`y` in normal mode, or `y` over
+  a visual / visual-line selection) copies to your **system** clipboard via OSC
+  52. This is pane-scoped (never grabs the tree) and works over SSH with no X11
+  forwarding — ideal on a remote box.
+  - **Gnome Terminal / VTE** ignore OSC 52 writes by default. Enable
+    *Preferences → your profile → "Allow setting clipboard"* (or any wording of
+    the clipboard-access option) so yanks reach the clipboard. Ghostty, iTerm2,
+    kitty, and WezTerm allow it out of the box.
+  - Inside **tmux**, also set `set -g set-clipboard on` so tmux forwards the
+    OSC 52 sequence to your terminal.
+  - Very large yanks can exceed a terminal's OSC 52 length cap and be dropped
+    silently — fall back to a shift-drag for those.
 - **`Esc` always steps back** one level (clear filter, close a panel, leave a
   mode) and never quits Loom — only `/quit` exits.
 
@@ -375,6 +398,7 @@ prDefaultTarget: ''
 | `/diff` `/blame` | selection | git on the selected file |
 | `/git <args>` | anywhere | git passthrough — branches, commits, diffs, history → main panel |
 | `/gh <args>` | anywhere | GitHub CLI passthrough — PRs, issues, releases → main panel |
+| `/bash <command>` | anywhere | shell passthrough — `bash -c`, full pipes/redirects/globs/chaining → main panel |
 | `/pr <branch> [--draft] [--no-ai]` | anywhere | open a PR: AI drafts title+body, you edit it in the editor, `:w` creates it |
 | `/find <regex>` | anywhere | ripgrep project search |
 | `/theme` | anywhere | switch color theme |

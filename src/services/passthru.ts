@@ -1,9 +1,16 @@
-/* CLI passthrough engine shared by /gh and /git. Spawns a binary with the
-   user's args and captures output for the main-area view. No shell — args are
-   tokenized here (quote-aware) so there's no shell-injection surface. The
-   binary's own auth/permissions apply. */
+/* CLI passthrough engine shared by /gh, /git and /bash.
 
-import { spawn } from 'node:child_process';
+   /gh and /git tokenize the arg string (quote-aware, see parseArgv) and spawn a
+   fixed binary with an argv ARRAY — no shell, so there's no shell-injection
+   surface and the binary's own auth/permissions apply.
+
+   /bash is deliberately different: it spawns `bash -c <raw string>` so the user
+   can use the full shell — pipes, redirects, globs, &&/||/;, subshells, $VAR
+   expansion and quoting all work. The raw command string is passed through
+   verbatim (no tokenization). All three reuse the same spawn/capture/timeout/
+   process-group-kill/ANSI-strip core (runCaptured). */
+
+import { spawn, type SpawnOptions } from 'node:child_process';
 
 export interface CommandResult {
   /** Binary label shown in the header, e.g. 'gh' or 'git'. */
@@ -125,21 +132,54 @@ export function runPassthroughArgv(spec: PassthruSpec, root: string, argv: strin
     });
   }
 
-  return new Promise((resolve) => {
-    const env: NodeJS.ProcessEnv = {
-      ...process.env,
-      ...spec.env,
-      ...(spec.forceTtyEnv && opts.cols && opts.cols > 0 ? { [spec.forceTtyEnv]: String(opts.cols) } : {}),
-    };
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    ...spec.env,
+    ...(spec.forceTtyEnv && opts.cols && opts.cols > 0 ? { [spec.forceTtyEnv]: String(opts.cols) } : {}),
+  };
 
+  return runCaptured({
+    label: spec.label,
+    argv,
+    bin,
+    spawnArgs: argv,
+    env,
+    root,
+    timeoutMs,
+    notFound: () => notFoundResult(spec, argv),
+  });
+}
+
+interface CapturedSpec {
+  /** Label shown in the result header, e.g. 'gh', 'git', 'bash'. */
+  label: string;
+  /** Logical argv recorded on the result (for the header echo). For /bash this
+     is the single raw command string. */
+  argv: string[];
+  /** Binary to spawn. */
+  bin: string;
+  /** Actual argv array passed to spawn (for /bash: ['-c', commandString]). */
+  spawnArgs: string[];
+  env: NodeJS.ProcessEnv;
+  root: string;
+  timeoutMs: number;
+  /** Result returned when the binary is missing from PATH. */
+  notFound: () => CommandResult;
+}
+
+/** Shared spawn/capture/timeout/process-group-kill/ANSI-strip core. */
+function runCaptured(spec: CapturedSpec): Promise<CommandResult> {
+  const { label, argv, bin, spawnArgs, env, root, timeoutMs } = spec;
+  return new Promise((resolve) => {
     let proc;
     try {
       // stdin ignored: the tool sees no TTY for input, so it errors instead of
       // hanging on commands that would otherwise prompt. detached makes it a
       // process-group leader so a timeout can kill the whole tree.
-      proc = spawn(bin, argv, { cwd: root, env, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
+      const spawnOpts: SpawnOptions = { cwd: root, env, stdio: ['ignore', 'pipe', 'pipe'], detached: true };
+      proc = spawn(bin, spawnArgs, spawnOpts);
     } catch {
-      resolve(notFoundResult(spec, argv));
+      resolve(spec.notFound());
       return;
     }
 
@@ -168,28 +208,28 @@ export function runPassthroughArgv(spec: PassthruSpec, root: string, argv: strin
     const timer = setTimeout(() => {
       killTree();
       finish({
-        label: spec.label,
+        label,
         argv,
-        lines: [`${spec.label} timed out after ${Math.round(timeoutMs / 1000)}s and was stopped.`],
+        lines: [`${label} timed out after ${Math.round(timeoutMs / 1000)}s and was stopped.`],
         code: 124,
         ok: false,
-        error: `${spec.label} timed out`,
+        error: `${label} timed out`,
         truncated: false,
       });
     }, timeoutMs);
 
-    proc.stdout.on('data', (d: Buffer) => {
+    proc.stdout?.on('data', (d: Buffer) => {
       if (outBytes < MAX_BYTES) {
         out += d.toString();
         outBytes += d.length;
       }
     });
-    proc.stderr.on('data', (d: Buffer) => {
+    proc.stderr?.on('data', (d: Buffer) => {
       err += d.toString();
     });
     proc.on('error', (e: NodeJS.ErrnoException) => {
-      if (e.code === 'ENOENT') finish(notFoundResult(spec, argv));
-      else finish({ label: spec.label, argv, lines: [e.message], code: -1, ok: false, error: e.message, truncated: false });
+      if (e.code === 'ENOENT') finish(spec.notFound());
+      else finish({ label, argv, lines: [e.message], code: -1, ok: false, error: e.message, truncated: false });
     });
     proc.on('close', (code) => {
       if (settled) return;
@@ -199,14 +239,14 @@ export function runPassthroughArgv(spec: PassthruSpec, root: string, argv: strin
         .split('\n')
         .map((l) => l.replace(/\r$/, '').replace(/\t/g, '  '));
       while (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
-      if (lines.length === 0) lines = [ok ? '(no output)' : `${spec.label} exited ${code ?? '?'} with no output`];
+      if (lines.length === 0) lines = [ok ? '(no output)' : `${label} exited ${code ?? '?'} with no output`];
       let truncated = false;
       if (lines.length > MAX_LINES) {
         lines = lines.slice(0, MAX_LINES);
         truncated = true;
       }
-      const result: CommandResult = { label: spec.label, argv, lines, code: code ?? -1, ok, truncated };
-      if (!ok) result.error = `${spec.label} exited ${code ?? '?'}`;
+      const result: CommandResult = { label, argv, lines, code: code ?? -1, ok, truncated };
+      if (!ok) result.error = `${label} exited ${code ?? '?'}`;
       finish(result);
     });
   });
@@ -248,4 +288,61 @@ export function runGit(root: string, argString: string, opts: RunOptions = {}): 
 
 export function runByLabel(label: PassthruLabel, root: string, argString: string, opts: RunOptions = {}): Promise<CommandResult> {
   return runPassthrough(label === 'gh' ? GH_SPEC : GIT_SPEC, root, argString, opts);
+}
+
+/* ── /bash — shell-interpreted passthrough ──────────────────────────────────
+   Unlike /gh and /git this spawns `bash -c <raw string>`, so the FULL shell is
+   available: pipes (|), redirects (>, >>, <), globs (*), chaining (&&, ||, ;),
+   subshells, $VAR expansion and quoting all work. The command string is passed
+   through verbatim — NO parseArgv tokenization (that would defeat the point). */
+
+const BASH_NOT_FOUND = [
+  'bash not found on PATH.',
+  '',
+  '/bash needs the bash shell to interpret your command.',
+  'install bash, or use /git and /gh for git/github operations.',
+];
+
+/** Run an arbitrary shell command via `bash -c <commandString>` and capture
+   its combined output. The raw string reaches the shell unchanged. */
+export function runBash(root: string, commandString: string, opts: RunOptions = {}): Promise<CommandResult> {
+  const cmd = commandString.trim();
+  // Empty command: no-op, don't spawn a shell.
+  if (cmd.length === 0) {
+    return Promise.resolve({
+      label: 'bash',
+      argv: [],
+      lines: ['usage: /bash <command>'],
+      code: 0,
+      ok: true,
+      truncated: false,
+    });
+  }
+
+  const bin = opts.bin ?? 'bash';
+  const timeoutMs = opts.timeoutMs ?? TIMEOUT_MS;
+  const env: NodeJS.ProcessEnv = { ...process.env, PAGER: 'cat' };
+
+  const notFound = (): CommandResult => ({
+    label: 'bash',
+    argv: [cmd],
+    lines: BASH_NOT_FOUND,
+    code: -1,
+    ok: false,
+    error: 'bash not found',
+    truncated: false,
+  });
+
+  return runCaptured({
+    label: 'bash',
+    // The header echoes the whole command as a single logical "arg".
+    argv: [cmd],
+    bin,
+    // The shell interprets the raw string; nothing is pre-tokenized.
+    spawnArgs: ['-c', cmd],
+    env,
+    root,
+    timeoutMs,
+    notFound,
+  });
 }

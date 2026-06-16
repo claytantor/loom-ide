@@ -130,7 +130,7 @@ function posBeforeEx(lines: readonly string[], endEx: Pos): Pos {
   return { row, col: maxNormalCol(lineAt(lines, row)) };
 }
 
-function execVisualOp(state: VimState, key: string, arg: string | null, register: string | null): VimState {
+function execVisualOp(state: VimState, key: string, arg: string | null, register: string | null): NormalResult {
   const range = visualRange(state);
   const snap = snapshotOf(state);
   const start = rangeStart(range);
@@ -140,7 +140,7 @@ function execVisualOp(state: VimState, key: string, arg: string | null, register
     case 'x': {
       const del = deleteRange(state.lines, range);
       const registers = writeRegister(state.registers, register, del.text, del.linewise, false);
-      return exitVisual(commitChange({ ...state, registers }, snap, del.lines, del.cursor));
+      return { state: exitVisual(commitChange({ ...state, registers }, snap, del.lines, del.cursor)) };
     }
     case 'c':
     case 's': {
@@ -148,20 +148,23 @@ function execVisualOp(state: VimState, key: string, arg: string | null, register
       const registers = writeRegister(state.registers, register, text, linewise, false);
       if (range.wise === 'line') {
         const next = spliceLines(state.lines, range.startRow, range.endRow, ['']);
-        return enterInsert({ ...exitVisual(state), registers }, snap, null, null, next, { row: range.startRow, col: 0 });
+        return { state: enterInsert({ ...exitVisual(state), registers }, snap, null, null, next, { row: range.startRow, col: 0 }) };
       }
       const del = deleteRange(state.lines, range);
-      return enterInsert({ ...exitVisual(state), registers }, snap, null, null, del.lines, range.start);
+      return { state: enterInsert({ ...exitVisual(state), registers }, snap, null, null, del.lines, range.start) };
     }
     case 'y': {
       const { text, linewise } = rangeText(state.lines, range);
       const registers = writeRegister(state.registers, register, text, linewise, true);
-      return exitVisual({
-        ...state,
-        registers,
-        cursor: clampNormal(state.lines, start),
-        desiredCol: null,
-      });
+      return {
+        state: exitVisual({
+          ...state,
+          registers,
+          cursor: clampNormal(state.lines, start),
+          desiredCol: null,
+        }),
+        yank: { text, linewise },
+      };
     }
     case '>':
     case '<': {
@@ -169,21 +172,21 @@ function execVisualOp(state: VimState, key: string, arg: string | null, register
       const endRow = range.wise === 'line' ? range.endRow : range.endEx.row;
       const lines = indentLines(state.lines, startRow, endRow, key === '>' ? 1 : -1);
       const cursor = { row: startRow, col: firstNonBlankCol(lineAt(lines, startRow)) };
-      return exitVisual(commitChange(state, snap, lines, cursor));
+      return { state: exitVisual(commitChange(state, snap, lines, cursor)) };
     }
     case '~': {
       const lines = toggleCaseRange(state.lines, range);
-      return exitVisual(commitChange(state, snap, lines, start));
+      return { state: exitVisual(commitChange(state, snap, lines, start)) };
     }
     case 'r': {
       const lines = fillRange(state.lines, range, arg as string);
-      return exitVisual(commitChange(state, snap, lines, start));
+      return { state: exitVisual(commitChange(state, snap, lines, start)) };
     }
     case 'p':
     case 'P': {
       const reg = readRegister(state.registers, register);
       if (!reg || reg.text === '') {
-        return exitVisual(setMessage(state, `nothing in register ${register ?? '"'}`));
+        return { state: exitVisual(setMessage(state, `nothing in register ${register ?? '"'}`)) };
       }
       const del = deleteRange(state.lines, range);
       const registers = writeRegister(state.registers, null, del.text, del.linewise, false);
@@ -214,18 +217,18 @@ function execVisualOp(state: VimState, key: string, arg: string | null, register
         lines = pasted.lines;
         cursor = pasted.cursor;
       }
-      return exitVisual(commitChange({ ...state, registers }, snap, lines, cursor));
+      return { state: exitVisual(commitChange({ ...state, registers }, snap, lines, cursor)) };
     }
     case 'o': {
       const a = state.visualStart ?? state.cursor;
-      return { ...state, visualStart: state.cursor, cursor: a, desiredCol: null, pendingKeys: '' };
+      return { state: { ...state, visualStart: state.cursor, cursor: a, desiredCol: null, pendingKeys: '' } };
     }
     case 'v':
-      return state.mode === 'visual' ? exitVisual(state) : { ...state, mode: 'visual', pendingKeys: '' };
+      return { state: state.mode === 'visual' ? exitVisual(state) : { ...state, mode: 'visual', pendingKeys: '' } };
     case 'V':
-      return state.mode === 'visual-line' ? exitVisual(state) : { ...state, mode: 'visual-line', pendingKeys: '' };
+      return { state: state.mode === 'visual-line' ? exitVisual(state) : { ...state, mode: 'visual-line', pendingKeys: '' } };
     default:
-      return exitVisual(state);
+      return { state: exitVisual(state) };
   }
 }
 
@@ -313,5 +316,5 @@ export function handleVisualKey(state: VimState, key: string, viewportRows: numb
   if (cmd.kind === 'object') {
     return { state: execVisualObject(base, cmd.ia, cmd.obj) };
   }
-  return { state: execVisualOp(base, cmd.key, cmd.arg, cmd.register) };
+  return execVisualOp(base, cmd.key, cmd.arg, cmd.register);
 }

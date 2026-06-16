@@ -3,7 +3,18 @@ import { filterSlash, filterThemeEntries, slashMatchPositions, themeEntries } fr
 
 describe('filterSlash', () => {
   test('bare slash lists everything', () => {
-    expect(filterSlash('/').length).toBe(13);
+    expect(filterSlash('/').length).toBe(15);
+  });
+  test('/add is selection-aware, takes a filename arg, captured as one', () => {
+    const items = filterSlash('/add components/Button.tsx');
+    expect(items.length).toBe(1);
+    expect(items[0]!.name).toBe('/add');
+    expect(items[0]!.arg).toBe('components/Button.tsx');
+    expect(items[0]!.takesArg).toBe(true);
+    expect(items[0]!.selScoped).toBe(true);
+  });
+  test('/a prefix offers /add', () => {
+    expect(filterSlash('/a').map((c) => c.name)).toContain('/add');
   });
   test('/pr is a distinct command that captures its args (target + flags)', () => {
     const items = filterSlash('/pr dev --draft --no-ai');
@@ -30,6 +41,17 @@ describe('filterSlash', () => {
     const names = filterSlash('/g').map((c) => c.name);
     expect(names).toContain('/git');
     expect(names).toContain('/gh');
+  });
+  test('/bash is a distinct command that captures its raw shell command as one arg', () => {
+    const items = filterSlash('/bash echo hi | tr a-z A-Z');
+    expect(items.length).toBe(1);
+    expect(items[0]!.name).toBe('/bash');
+    expect(items[0]!.arg).toBe('echo hi | tr a-z A-Z');
+    expect(items[0]!.takesArg).toBe(true);
+    expect(items[0]!.selScoped).toBe(false);
+  });
+  test('/b prefix offers /bash', () => {
+    expect(filterSlash('/b').map((c) => c.name)).toContain('/bash');
   });
   test('/help resolves by prefix', () => {
     const items = filterSlash('/help');
