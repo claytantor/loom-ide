@@ -4,3 +4,4 @@ dist/
 .vitest-cache/
 .claude/
 .claude/*
+SCRATCH.md
