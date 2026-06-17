@@ -1,6 +1,6 @@
 /* Single-buffer disk IO with trailing-newline preservation. */
 
-import { readFile, writeFile, rename, mkdir } from 'node:fs/promises';
+import { readFile, writeFile, rename, mkdir, stat, chmod, unlink } from 'node:fs/promises';
 import { dirname, join, relative } from 'node:path';
 import { resolveAddPath } from '../core/addPath.js';
 
@@ -94,5 +94,100 @@ export async function createFile(
     const e = err as NodeJS.ErrnoException;
     if (e.code === 'EEXIST') return { ok: false, reason: 'exists', relPath: res.relPath };
     return { ok: false, reason: 'error', message: e.message };
+  }
+}
+
+/** Resolve `relPath` under `root`, refusing anything that escapes the repo.
+   Returns the absolute path, or null when it would land outside the working
+   tree (path traversal / absolute escape). Mirrors createFile's guard. */
+function resolveInRoot(root: string, relPath: string): string | null {
+  const abs = join(root, relPath);
+  const rel = relative(root, abs);
+  if (rel === '' || rel.startsWith('..')) return null;
+  return abs;
+}
+
+export type DeleteFileResult =
+  | { ok: true }
+  | { ok: false; reason: 'not-found' | 'is-directory' | 'outside-root' | 'error'; message?: string };
+
+/**
+ * Delete `relPath` (resolved under `root`) — the equivalent of `rm <file>`.
+ *
+ * Files only: an existing directory is refused with `is-directory` rather than
+ * deleted (recursive directory removal is intentionally out of scope for /rm).
+ * Path traversal / absolute escapes are refused with `outside-root`, and a
+ * missing target reads as `not-found`. Mirrors createFile's typed result.
+ */
+export async function deleteFile(root: string, relPath: string): Promise<DeleteFileResult> {
+  const abs = resolveInRoot(root, relPath);
+  if (!abs) return { ok: false, reason: 'outside-root' };
+
+  let st;
+  try {
+    st = await stat(abs);
+  } catch (err) {
+    const e = err as NodeJS.ErrnoException;
+    if (e.code === 'ENOENT') return { ok: false, reason: 'not-found' };
+    return { ok: false, reason: 'error', message: e.message };
+  }
+  if (st.isDirectory()) return { ok: false, reason: 'is-directory' };
+
+  try {
+    await unlink(abs);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, reason: 'error', message: (err as Error).message };
+  }
+}
+
+export type MakeExecutableResult =
+  | { ok: true }
+  | { ok: false; reason: 'not-found' | 'not-a-file' | 'outside-root' | 'error'; message?: string };
+
+/**
+ * Add the execute bit to `relPath` (resolved under `root`) — the equivalent of
+ * `chmod +x`: it ORs `0o111` onto the file's current mode, preserving existing
+ * permission bits rather than hardcoding `0o755`.
+ *
+ * Only operates on an existing regular file inside the repo; path traversal /
+ * absolute escapes and non-files are refused with a typed reason.
+ */
+export async function makeExecutable(root: string, relPath: string): Promise<MakeExecutableResult> {
+  const abs = resolveInRoot(root, relPath);
+  if (!abs) return { ok: false, reason: 'outside-root' };
+
+  let st;
+  try {
+    st = await stat(abs);
+  } catch (err) {
+    const e = err as NodeJS.ErrnoException;
+    if (e.code === 'ENOENT') return { ok: false, reason: 'not-found' };
+    return { ok: false, reason: 'error', message: e.message };
+  }
+  if (!st.isFile()) return { ok: false, reason: 'not-a-file' };
+
+  try {
+    await chmod(abs, st.mode | 0o111);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, reason: 'error', message: (err as Error).message };
+  }
+}
+
+/**
+ * Lightweight pre-check for the chmod-and-rerun flow: is `relPath` a real,
+ * in-root, regular file that currently LACKS the execute bit? Used by the app
+ * layer to decide whether prompting is justified after a 126 exit. Any failure
+ * (outside root, missing, not a file, error) reads as "don't prompt".
+ */
+export async function isNonExecFile(root: string, relPath: string): Promise<boolean> {
+  const abs = resolveInRoot(root, relPath);
+  if (!abs) return false;
+  try {
+    const st = await stat(abs);
+    return st.isFile() && (st.mode & 0o111) === 0;
+  } catch {
+    return false;
   }
 }

@@ -38,8 +38,12 @@ export interface PrCompose {
 
 export type ConfirmAction =
   | { kind: 'discard'; path: string }
+  | { kind: 'delete'; path: string }
   | { kind: 'quit' }
-  | { kind: 'open-other'; path: string };
+  | { kind: 'open-other'; path: string }
+  /** A /bash command failed (exit 126) because `path` lacks +x; on yes, chmod +x
+     it and re-run the original `command`. */
+  | { kind: 'chmod-run'; path: string; command: string };
 
 export interface Diagnostic {
   line: number;

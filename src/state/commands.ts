@@ -18,6 +18,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: '/discard', selScoped: true, desc: 'revert {sel} to HEAD', danger: true },
   { name: '/blame', selScoped: true, desc: 'git blame {sel}' },
   { name: '/rename', selScoped: true, desc: 'rename {sel}', takesArg: true },
+  { name: '/rm', selScoped: true, desc: 'delete {sel}', danger: true },
   { name: '/reveal', selScoped: true, desc: 'reveal {sel} in tree' },
   { name: '/find', selScoped: false, desc: 'ripgrep project search', takesArg: true },
   { name: '/git', selScoped: false, desc: 'git — branches, commits, diffs, history', takesArg: true },

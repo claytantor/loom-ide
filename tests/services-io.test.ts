@@ -5,8 +5,8 @@ import { join } from 'node:path';
 import { scanRepo, buildIgnorePredicate } from '../src/services/fsScan.js';
 import { fallbackSearch, findInProject } from '../src/services/ripgrep.js';
 import { ensureSeeded, loadSettings, saveConfig } from '../src/services/configIo.js';
-import { createFile, loadBuffer, saveBuffer } from '../src/services/bufferIo.js';
-import { stat } from 'node:fs/promises';
+import { createFile, deleteFile, isNonExecFile, loadBuffer, makeExecutable, saveBuffer } from '../src/services/bufferIo.js';
+import { stat, chmod } from 'node:fs/promises';
 
 let dir: string;
 
@@ -201,5 +201,91 @@ describe('createFile', () => {
     const res = await createFile(dir, 'blocked', 'child.ts');
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.reason).toBe('error');
+  });
+});
+
+describe('makeExecutable / isNonExecFile', () => {
+  test('adds the execute bit to a non-executable file, preserving read/write bits', async () => {
+    const p = join(dir, 'scripts', 'run.sh');
+    await mkdir(join(dir, 'scripts'), { recursive: true });
+    await writeFile(p, '#!/usr/bin/env bash\necho hi\n');
+    await chmod(p, 0o644); // -rw-r--r--, no execute
+
+    expect(await isNonExecFile(dir, 'scripts/run.sh')).toBe(true);
+    const res = await makeExecutable(dir, 'scripts/run.sh');
+    expect(res).toEqual({ ok: true });
+
+    const mode = (await stat(p)).mode & 0o777;
+    expect(mode & 0o111).toBe(0o111); // exec bit on for u/g/o
+    expect(mode & 0o644).toBe(0o644); // original read/write bits preserved
+    expect(await isNonExecFile(dir, 'scripts/run.sh')).toBe(false); // now executable
+  });
+
+  test('rejects path traversal that escapes the repo', async () => {
+    expect(await makeExecutable(dir, '../../etc/passwd')).toEqual({ ok: false, reason: 'outside-root' });
+    expect(await isNonExecFile(dir, '../../etc/passwd')).toBe(false);
+  });
+
+  test('an absolute candidate is confined under root (never escapes)', async () => {
+    // join(root, '/etc/hosts') folds the leading slash away → <root>/etc/hosts,
+    // which doesn't exist, so the system file is never touched. Conservative:
+    // no real in-root file ⇒ no chmod, no prompt.
+    const res = await makeExecutable(dir, '/etc/hosts');
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toBe('not-found');
+    expect(await isNonExecFile(dir, '/etc/hosts')).toBe(false);
+  });
+
+  test('missing file → not-found', async () => {
+    expect(await makeExecutable(dir, 'nope.sh')).toEqual({ ok: false, reason: 'not-found' });
+    expect(await isNonExecFile(dir, 'nope.sh')).toBe(false);
+  });
+
+  test('a directory is not a file', async () => {
+    await mkdir(join(dir, 'adir'), { recursive: true });
+    const res = await makeExecutable(dir, 'adir');
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toBe('not-a-file');
+    expect(await isNonExecFile(dir, 'adir')).toBe(false);
+  });
+
+  test('an already-executable file reads as not a candidate', async () => {
+    const p = join(dir, 'ok.sh');
+    await writeFile(p, '#!/bin/sh\n');
+    await chmod(p, 0o755);
+    expect(await isNonExecFile(dir, 'ok.sh')).toBe(false);
+  });
+});
+
+describe('deleteFile', () => {
+  test('deletes an existing regular file', async () => {
+    const p = join(dir, 'gone.ts');
+    await writeFile(p, 'x');
+    const res = await deleteFile(dir, 'gone.ts');
+    expect(res).toEqual({ ok: true });
+    await expect(stat(p)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  test('refuses a directory with is-directory (never recurses)', async () => {
+    await mkdir(join(dir, 'adir'), { recursive: true });
+    const res = await deleteFile(dir, 'adir');
+    expect(res).toEqual({ ok: false, reason: 'is-directory' });
+    // The directory is untouched.
+    expect((await stat(join(dir, 'adir'))).isDirectory()).toBe(true);
+  });
+
+  test('missing file → not-found', async () => {
+    expect(await deleteFile(dir, 'nope.ts')).toEqual({ ok: false, reason: 'not-found' });
+  });
+
+  test('rejects path traversal that escapes the repo', async () => {
+    expect(await deleteFile(dir, '../../etc/passwd')).toEqual({ ok: false, reason: 'outside-root' });
+  });
+
+  test('an absolute candidate is confined under root (never escapes)', async () => {
+    // join(root, '/etc/hosts') folds the leading slash away → <root>/etc/hosts,
+    // which doesn't exist, so the system file is never touched.
+    const res = await deleteFile(dir, '/etc/hosts');
+    expect(res).toEqual({ ok: false, reason: 'not-found' });
   });
 });

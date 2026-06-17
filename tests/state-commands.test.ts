@@ -3,7 +3,7 @@ import { filterSlash, filterThemeEntries, slashMatchPositions, themeEntries } fr
 
 describe('filterSlash', () => {
   test('bare slash lists everything', () => {
-    expect(filterSlash('/').length).toBe(15);
+    expect(filterSlash('/').length).toBe(16);
   });
   test('/add is selection-aware, takes a filename arg, captured as one', () => {
     const items = filterSlash('/add components/Button.tsx');
