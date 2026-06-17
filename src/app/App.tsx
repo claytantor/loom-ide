@@ -24,17 +24,20 @@ import { parseArgv, runBash, runByLabel, runGit, type CommandResult, type Passth
 import {
   commitLogDraft, createPr, gatherPrContext, generatePrDescription, parseDraft, preflightAuth,
 } from '../services/pr.js';
-import { createFile, loadBuffer, renamePath, saveBuffer } from '../services/bufferIo.js';
+import { createFile, deleteFile, isNonExecFile, loadBuffer, makeExecutable, renamePath, saveBuffer } from '../services/bufferIo.js';
 import { copyToClipboard } from '../services/clipboard.js';
+import { completePathToken } from '../services/complete.js';
 import { extractPaste, hasPasteMarker } from '../core/paste.js';
 import { currentLevelDir, type SelKind } from '../core/addPath.js';
+import { detectNonExecCandidate } from '../core/execBit.js';
 import { shortHostname } from '../services/host.js';
 import { ensureSeeded, loadSettings, saveConfig } from '../services/configIo.js';
 import { LspManager, pathToUri, resolveLanguage, uriToPath, type LspClient } from '../services/lsp/index.js';
 
 import { initialState, reduce, FLASH_MS } from '../state/reducer.js';
 import { deriveOmniMode, type ConfirmAction, type PrCompose } from '../state/types.js';
-import { filterSlash, filterThemeEntries, themeEntries, type SlashItem, type ThemeEntry } from '../state/commands.js';
+import { filterSlash, filterThemeEntries, themeEntries, SLASH_COMMANDS, type SlashItem, type ThemeEntry } from '../state/commands.js';
+import { completeSlash } from '../core/complete.js';
 
 import { ChromeContext } from '../ui/context.js';
 import { TreePane } from '../ui/TreePane.js';
@@ -368,6 +371,25 @@ export function App({ root }: AppProps): React.JSX.Element {
     dispatch({ type: 'spinner', label: null });
     dispatch({ type: 'view', view: 'command', title: `bash ${cmd}`, command: result });
     if (result.error) toast(result.error, true);
+
+    // Exit 126 is bash's "found but not executable" signal. Detect the offending
+    // script from the output, and if it's a real in-root non-executable file,
+    // offer to chmod +x and re-run. The 126 error is already on screen, so the
+    // user sees the failure and the prompt together. The fs stat is the real
+    // gate — a shape-only detector match without a qualifying file does nothing.
+    if (result.code === 126) {
+      const candidate = detectNonExecCandidate(cmd, result.lines);
+      if (candidate && (await isNonExecFile(root, candidate))) {
+        dispatch({
+          type: 'input-mode',
+          mode: {
+            kind: 'confirm',
+            question: `${candidate} isn't executable — chmod +x and run?`,
+            action: { kind: 'chmod-run', path: candidate, command: cmd },
+          },
+        });
+      }
+    }
   }, [root, toast]);
 
   /* ── /pr — AI-assisted pull request ─────────────────────────────────────
@@ -513,14 +535,58 @@ export function App({ root }: AppProps): React.JSX.Element {
         refreshGit();
         return;
       }
+      case 'delete': {
+        const res = await deleteFile(root, action.path);
+        if (!res.ok) {
+          switch (res.reason) {
+            case 'not-found':
+              toast(`${action.path} no longer exists`, true);
+              break;
+            case 'is-directory':
+              toast(`${action.path} is a directory — not deleted`, true);
+              break;
+            case 'outside-root':
+              toast('refusing to delete outside the repo', true);
+              break;
+            case 'error':
+              toast(res.message ?? `delete failed for ${action.path}`, true);
+              break;
+          }
+          return;
+        }
+        // Optimistically drop the deleted file from the tree (mirror submitRename).
+        const s = stateRef.current;
+        dispatch({
+          type: 'tree-batch',
+          batch: { added: [], addedDirs: [], changed: [], removed: [action.path] },
+          now: Date.now(),
+        });
+        dispatch({ type: 'remove-ghosts', paths: [action.path] });
+        if (s.openFile === action.path) closeEditor();
+        const parent = parentPath(action.path);
+        if (parent) dispatch({ type: 'select', path: parent });
+        toast(`deleted ${action.path}`);
+        refreshGit();
+        return;
+      }
       case 'quit':
         doQuit();
         return;
       case 'open-other':
         await openFileAt(action.path);
         return;
+      case 'chmod-run': {
+        const res = await makeExecutable(root, action.path);
+        if (res.ok) {
+          toast(`+x ${action.path}`);
+          await runBashCmd(action.command);
+        } else {
+          toast(res.message ?? `chmod +x failed: ${res.reason}`, true);
+        }
+        return;
+      }
     }
-  }, [root, toast, refreshGit, openFileAt, doQuit]);
+  }, [root, toast, refreshGit, openFileAt, doQuit, runBashCmd, closeEditor]);
 
   const submitRename = useCallback(async (target: string, newName: string): Promise<void> => {
     dispatch({ type: 'input-mode', mode: null });
@@ -671,6 +737,18 @@ export function App({ root }: AppProps): React.JSX.Element {
         if (sel) {
           dispatch({ type: 'input-mode', mode: { kind: 'rename', target: sel } });
           pushOmni(basename(sel));
+        } else toast('select a file first');
+        return;
+      case '/rm':
+        clear();
+        if (sel) {
+          dispatch({
+            type: 'input-mode',
+            mode: { kind: 'confirm', question: `delete ${sel}?`, action: { kind: 'delete', path: sel } },
+          });
+        } else if (s.selPath) {
+          // A node is selected but it isn't a file — /rm only deletes files.
+          toast(`/rm deletes files — ${basename(s.selPath)} is a directory`, true);
         } else toast('select a file first');
         return;
       case '/reveal': {
@@ -917,6 +995,18 @@ export function App({ root }: AppProps): React.JSX.Element {
         }
         return;
       }
+      // Tab: OS/CLI-style path completion of the last token, bash input only.
+      // Other input kinds leave Tab a no-op. The dir read is async, so compute
+      // off the synchronous handler and push the result back (mirrors runBashCmd).
+      if (key.tab) {
+        if (im.kind === 'bash') {
+          void (async () => {
+            const next = await completePathToken(root, omniRef.current);
+            if (next !== omniRef.current) pushOmni(next);
+          })();
+        }
+        return;
+      }
       if (key.backspace || key.delete) {
         pushOmni(omni.slice(0, -1));
         return;
@@ -930,6 +1020,25 @@ export function App({ root }: AppProps): React.JSX.Element {
       const list = refs.current.themeItems ?? refs.current.slashItems;
       const max = Math.max(0, list.length - 1);
       const sel = Math.min(s.slashSel, max);
+      // Tab: completion. `/bash <token>` routes to path completion of the arg
+      // (the `/bash ` prefix is preserved by completePathToken's token split);
+      // any other head does shell-like command-name completion. Sits ahead of
+      // the printable/pushOmni handling so Tab never types a literal char.
+      if (key.tab) {
+        const spaceAt = omni.indexOf(' ');
+        const head = spaceAt < 0 ? omni : omni.slice(0, spaceAt);
+        if (head === '/bash' && spaceAt >= 0) {
+          void (async () => {
+            const next = await completePathToken(root, omniRef.current);
+            if (next !== omniRef.current) pushOmni(next);
+          })();
+        } else {
+          const selName = refs.current.slashItems[sel]?.name;
+          const next = completeSlash(omni, SLASH_COMMANDS, selName);
+          if (next !== omni) pushOmni(next);
+        }
+        return;
+      }
       if (key.escape) {
         clearOmni(false);
         return;
