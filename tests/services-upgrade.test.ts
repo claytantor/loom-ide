@@ -5,9 +5,10 @@ import { join } from 'node:path';
 import { runUpgrade, upgradeSteps, type UpgradeStep } from '../src/services/upgrade.js';
 
 describe('upgradeSteps', () => {
-  test('pulls, reinstalls, then builds — in that order', () => {
+  test('fetches, hard-resets to origin/main, reinstalls, then builds — in that order', () => {
     expect(upgradeSteps().map((s) => `${s.cmd} ${s.args.join(' ')}`)).toEqual([
-      'git pull --ff-only',
+      'git fetch --tags origin main',
+      'git reset --hard origin/main',
       'npm install --no-fund --no-audit --loglevel=error',
       'npm run build',
     ]);
@@ -44,7 +45,7 @@ describe('runUpgrade', () => {
     });
     expect(res.ok).toBe(true);
     expect(res.message).toMatch(/up to date/i);
-    expect(calls).toEqual(['git:true', 'npm:true', 'npm:true']);
+    expect(calls).toEqual(['git:true', 'git:true', 'npm:true', 'npm:true']);
   });
 
   test('stops at the first failing step and names it', async () => {
@@ -56,13 +57,13 @@ describe('runUpgrade', () => {
     });
     expect(res.ok).toBe(false);
     expect(res.message).toMatch(/installing dependencies/);
-    expect(calls).toEqual(['git', 'npm']); // build never runs
+    expect(calls).toEqual(['git', 'git', 'npm']); // build never runs
   });
 
-  test('a git-pull failure carries the uncommitted/upstream hint', async () => {
+  test('a git failure carries the network/remote hint', async () => {
     await mkdir(join(dir, '.git'));
-    const res = runUpgrade(dir, (s) => s.cmd !== 'git'); // fail at `git pull`
+    const res = runUpgrade(dir, (s) => s.cmd !== 'git'); // fail at `git fetch`
     expect(res.ok).toBe(false);
-    expect(res.message).toMatch(/uncommitted|upstream/i);
+    expect(res.message).toMatch(/network|origin\/main|reachable/i);
   });
 });

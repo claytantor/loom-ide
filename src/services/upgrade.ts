@@ -21,7 +21,14 @@ const INSTALL_CMD =
 
 export function upgradeSteps(): UpgradeStep[] {
   return [
-    { label: 'fetching latest', cmd: 'git', args: ['pull', '--ff-only'] },
+    // `~/.loom/app` is a managed clone, not a dev checkout — and `npm install`
+    // rewrites package-lock.json there, so a plain `git pull --ff-only` aborts
+    // ("local changes would be overwritten") against a release that also bumps
+    // the lockfile. Fetch + hard-reset to origin/main instead: idempotent, and
+    // immune to npm dirtying tracked files (untracked dist/ & node_modules are
+    // left alone).
+    { label: 'fetching latest', cmd: 'git', args: ['fetch', '--tags', 'origin', 'main'] },
+    { label: 'syncing to origin/main', cmd: 'git', args: ['reset', '--hard', 'origin/main'] },
     { label: 'installing dependencies', cmd: 'npm', args: ['install', '--no-fund', '--no-audit', '--loglevel=error'] },
     { label: 'building', cmd: 'npm', args: ['run', 'build'] },
   ];
@@ -47,7 +54,7 @@ export function runUpgrade(appDir: string, run: StepRunner = defaultRunner): Upg
   for (const step of upgradeSteps()) {
     if (!run(step, appDir)) {
       const hint =
-        step.cmd === 'git' ? ' — uncommitted changes or no upstream? resolve those and retry' : '';
+        step.cmd === 'git' ? ' — check your network and that origin/main is reachable, then retry' : '';
       return { ok: false, message: `upgrade failed while ${step.label} (\`${step.cmd} ${step.args.join(' ')}\`)${hint}` };
     }
   }
