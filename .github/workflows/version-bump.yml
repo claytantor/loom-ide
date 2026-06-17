@@ -1,0 +1,80 @@
+name: Version bump
+
+# Bump the {major}.{minor}.{build} version in package.json whenever a PR from
+# `dev` is merged into `main`. By default the {build} (patch) component is
+# incremented; add a `release:minor` or `release:major` label to the PR to bump
+# those instead. The bump is committed back to main and tagged `v<version>`.
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+# Avoid two merges racing to bump at the same time.
+concurrency:
+  group: version-bump-main
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    # Only on a real merge (not a closed-without-merge) of dev -> main.
+    if: >
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.head.ref == 'dev'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          # GITHUB_TOKEN pushes do NOT retrigger workflows, so this can't loop.
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Configure git identity
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Pick bump level from PR labels
+        id: level
+        env:
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+        run: |
+          level=patch
+          case ",$LABELS," in
+            *,release:major,*) level=major ;;
+            *,release:minor,*) level=minor ;;
+          esac
+          echo "level=$level" >> "$GITHUB_OUTPUT"
+          echo "Bumping: $level"
+
+      - name: Bump version
+        id: bump
+        run: |
+          # --no-git-tag-version edits package.json + package-lock.json only;
+          # we commit and tag explicitly below. `npm version` prints `vX.Y.Z`.
+          version="$(npm version ${{ steps.level.outputs.level }} --no-git-tag-version)"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "New version: $version"
+
+      - name: Commit, tag, and push
+        run: |
+          git add package.json package-lock.json
+          git commit -m "chore(release): ${{ steps.bump.outputs.version }} [skip ci]"
+          git tag "${{ steps.bump.outputs.version }}"
+          git push origin HEAD:main --follow-tags
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.bump.outputs.version }}
+          name: ${{ steps.bump.outputs.version }}
+          # Auto-generate notes from the PRs/commits since the previous tag.
+          generate_release_notes: true

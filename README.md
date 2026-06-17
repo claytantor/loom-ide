@@ -456,6 +456,44 @@ The pure `core/` modules never import Ink or Node built-ins, so the vim
 engine, fuzzy filter, and parsers unit-test in milliseconds; UI behavior is
 covered with `ink-testing-library`.
 
+## Releases & versioning
+
+Loom uses semantic `{major}.{minor}.{build}` versions, with `package.json` as
+the single source of truth (`loom --version` reads it). The version is bumped
+**automatically when a PR from `dev` is merged into `main`** — you never edit
+the number by hand.
+
+The [`.github/workflows/version-bump.yml`](.github/workflows/version-bump.yml)
+workflow runs on that merge and:
+
+1. Bumps the version with `npm version` (updates `package.json` **and**
+   `package-lock.json`).
+2. Commits the bump back to `main` as `chore(release): vX.Y.Z [skip ci]`.
+3. Tags the commit `vX.Y.Z` and pushes it.
+4. Cuts a GitHub Release with auto-generated notes from the PRs/commits since
+   the previous tag.
+
+**Which part bumps?** By default the `{build}` (patch) component — `0.1.0 →
+0.1.1`. To bump higher, add a label to the PR *before* merging:
+
+| PR label        | Bump   | Example         |
+| --------------- | ------ | --------------- |
+| _(none)_        | build  | `0.1.0 → 0.1.1` |
+| `release:minor` | minor  | `0.1.4 → 0.2.0` |
+| `release:major` | major  | `0.9.2 → 1.0.0` |
+
+So the everyday `/pr main` from a `dev` branch ships a patch bump for free, and
+a labeled PR cuts a minor/major release through the same merge.
+
+**No infinite loops:** the workflow triggers on the PR-closed event (not on
+pushes to `main`), and pushes made with the built-in `GITHUB_TOKEN` don't
+retrigger workflows — the `[skip ci]` marker is just belt-and-suspenders.
+
+> **Protected `main`?** The workflow pushes the bump commit directly to `main`.
+> If `main` has branch protection that requires PRs or passing checks, allow
+> `github-actions[bot]` to bypass it (Settings → Branches), or the push will be
+> rejected. Ask if you'd prefer a variant that opens a follow-up PR instead.
+
 ## License
 
 MIT.
