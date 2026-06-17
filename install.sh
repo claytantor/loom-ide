@@ -49,8 +49,13 @@ node -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 18 ? 0 : 1)
 mkdir -p "$LOOM_HOME_DIR" "$BIN_DIR"
 
 if [ -d "$DEST/.git" ]; then
+  # Hard-reset to origin/main rather than `pull --ff-only`: this is a managed
+  # clone, and `npm install` below rewrites package-lock.json, so a fast-forward
+  # pull would abort against a release that also bumps the lockfile. Untracked
+  # dist/ and node_modules are left untouched.
   say "updating existing install in $DEST"
-  git -C "$DEST" pull --ff-only
+  git -C "$DEST" fetch --tags origin main
+  git -C "$DEST" reset --hard origin/main
 else
   say "cloning $REPO"
   git clone --depth 1 "$REPO" "$DEST"
